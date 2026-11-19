@@ -5,8 +5,9 @@ import json
 import sys
 from dataclasses import asdict
 
-from ._json import encode_json, json_row
+from ._json import encode_json, query_payload
 from .connector import InvalidQueryError, Parameters, QueryBridgeError, QueryLimits
+from .nl_cli import add_nl_commands, run_nl_command
 from .sqlite import SQLiteConnector
 
 
@@ -42,24 +43,19 @@ def main(argv: list[str] | None = None) -> int:
                        help="Maximum returned rows (default %(default)s)")
     query.add_argument("--max-result-bytes", type=int, default=defaults.max_result_bytes,
                        help="Maximum encoded column and row bytes (default %(default)s)")
+    add_nl_commands(commands)
     args = parser.parse_args(argv)
 
     try:
         if args.command == "inspect":
             connector = SQLiteConnector(args.database, QueryLimits(timeout_seconds=args.timeout))
             payload = {"status": "ok", **asdict(connector.inspect())}
-        else:
+        elif args.command == "query":
             limits = QueryLimits(args.timeout, args.max_rows, args.max_result_bytes)
             result = SQLiteConnector(args.database, limits).execute(args.sql, _parameters(args.params))
-            payload = {
-                "status": "empty" if result.is_empty else "ok",
-                "sql": result.sql,
-                "columns": result.columns,
-                "rows": [json_row(row) for row in result.rows],
-                "result_bytes": result.result_bytes,
-                "truncated": result.truncated,
-                "truncation_reason": result.truncation_reason,
-            }
+            payload = query_payload(result)
+        else:
+            payload = run_nl_command(args)
     except QueryBridgeError as error:
         print(encode_json({"status": error.code, "message": str(error)}), file=sys.stderr)
         return 1

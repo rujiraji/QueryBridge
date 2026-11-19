@@ -100,6 +100,10 @@ class DatabaseError(QueryBridgeError):
     code = "database_error"
 
 
+class SchemaChangedError(QueryBridgeError):
+    code = "schema_changed"
+
+
 class QueryRejectedError(QueryBridgeError):
     code = "rejected_query"
 

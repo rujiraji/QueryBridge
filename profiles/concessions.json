@@ -1,0 +1,60 @@
+{
+  "id": "concession-tracker",
+  "version": "1",
+  "definitions": [
+    {
+      "id": "event-scope",
+      "text": "Use an explicitly requested event by name or id. Tracker reports use the active event (events.is_active = 1). If an event scope is needed and none is clear, ask which event or whether to use the active event."
+    },
+    {
+      "id": "recorded-money",
+      "text": "Amounts are integer cents. Use saved sale_transactions total_revenue_cents, total_cost_cents and total_profit_cents or sale_transaction_items revenue_cents, cost_cents and profit_cents for historical figures. Current product prices and current inventory costs are separate. Recorded Square revenue is gross recorded revenue. There is no verified field for Square fees, settlement adjustments, or processor net."
+    },
+    {
+      "id": "status",
+      "text": "Completed-event reports include only sale_transactions.status = 'completed'. A reversed transaction remains in history with status = 'reversed' and reversed_at set. Undo restores consumed batch quantities. Use completed status for financial summaries unless the question explicitly requests reversal history."
+    },
+    {
+      "id": "payments",
+      "text": "Payment types are cash, square, free, and waste. Free and waste use zero recorded revenue and still incur cost and consume inventory. Overall completed-event totals include free and waste costs. Paid transactions are cash and square."
+    },
+    {
+      "id": "units-and-waste",
+      "text": "The tracker's default product report includes free units and excludes waste. A stakeholder definition of units sold is undecided. Ask whether to count paid units only or include free units when scope is unclear. The tracker waste report counts completed waste sales by product. Manual inventory adjustments and bulk-batch discards are separate, and a combined waste definition is undecided."
+    },
+    {
+      "id": "stock",
+      "text": "Current stock sums remaining_quantity from inventory batches excluding inactive batches, grouped by inventory item and its tracking unit. Inventory usage links sale lines to consumed inventory and batches, and usage history can include reversed sales. Manual inventory adjustments are separately audited. Use saved sale costs for past sales."
+    },
+    {
+      "id": "calendar",
+      "text": "Sale and reversal timestamps are stored as UTC ISO 8601 text. A reporting timezone, reference date for relative expressions, and business day boundary have not been chosen. Ask for explicit start/end timestamps or a UTC calendar range. Apply only the calendar interpretation explicitly provided. SQLite's local timezone is machine-specific."
+    }
+  ],
+  "clarifications": [
+    {
+      "when": "\\b(today|yesterday|tomorrow|last night|the weekend|this weekend|last weekend|this week|last week|this month|last month|this year|last year|week to date|month to date|year to date|(?:past|last) \\d+ (?:days|weeks))\\b",
+      "question": "What exact start and end dates or timestamps, timezone, and reporting-day boundary should I use?"
+    },
+    {
+      "when": "\\b(?:calendar day|daily|per day|\\d{4}-\\d{2}-\\d{2}|(?:on|in|during|since|until) (?:January|February|March|April|May|June|July|August|September|October|November|December))\\b",
+      "unless": "\\bUTC\\b|\\d{2}:\\d{2}(?::\\d{2})?(?:Z|[+-]\\d{2}:\\d{2})\\b",
+      "question": "Which timezone and reporting-day boundary should I use for those dates, or what are the exact UTC start and end timestamps?"
+    },
+    {
+      "when": "\\b(?:how many\\s+(?!(?:cents|dollars|transactions|orders|sales)\\b).{0,48}\\bsold|(?:units|items)(?: were)? sold|quantity sold)\\b",
+      "unless": "\\b(?:paid(?: units| items| sales)? only|paid (?:units|items)|(?:including|include|excluding|exclude) free)\\b",
+      "question": "Should units sold count paid units only or also include free units?"
+    },
+    {
+      "when": "\\b(?:waste|wasted)\\b",
+      "unless": "\\b(?:recorded waste|waste sales|waste transactions|waste lines|including (?:manual|bulk)|exclude (?:manual|bulk))\\b",
+      "question": "Should waste cover recorded waste sales only, or also include manual removals and bulk-batch discards?"
+    },
+    {
+      "when": "^(?=.*\\bsquare\\b)(?=.*\\b(?:revenue|sales|proceeds|payments|made)\\b)",
+      "unless": "\\b(?:recorded|gross|net|before fees|after fees)\\b",
+      "question": "Do you mean recorded gross Square revenue or net proceeds after fees and settlement adjustments?"
+    }
+  ]
+}
