@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "QueryBridge"
+version = "0.1.0"
+description = "Schema discovery and restricted read queries for SQLite databases"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+querybridge = "querybridge.cli:main"
+
+[tool.setuptools]
+packages = ["querybridge"]
