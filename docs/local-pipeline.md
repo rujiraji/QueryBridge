@@ -9,7 +9,16 @@ $env:OLLAMA_NO_CLOUD = '1'
 ollama serve
 ```
 
-The following example uses two explicit model tags. They are setup examples and await live accuracy evaluation. After starting Ollama, pull the tags in a second terminal.
+The review workspace has a standalone Ollama runtime and model cache in ignored storage. To restart that server from the repository root:
+
+```powershell
+$env:OLLAMA_NO_CLOUD = '1'
+$env:OLLAMA_HOST = '127.0.0.1:11434'
+$env:OLLAMA_MODELS = (Resolve-Path '.querybridge-data/ollama-phase2-models').Path
+& '.querybridge-data/ollama-v0.40.16/ollama.exe' serve
+```
+
+After starting Ollama, pull the model tags in a second terminal. The live evaluation record includes the observed accuracy and latency for the tested tags.
 
 ```powershell
 ollama pull qwen2.5-coder:7b
@@ -45,14 +54,16 @@ The expected fixture values are `[[4,700,450,250]]`. A successful response conta
 | SQLite limits | | `--timeout`, `--max-rows`, `--max-result-bytes` on `ask` |
 | Business definitions | | `--profile PATH` on `index` and `ask`, default generic profile |
 
-CLI flags take precedence over environment values. A profile is a local JSON file with an `id`, `version`, an array of `definitions` with unique `id` and `text` fields, and an ordered `clarifications` array. A rule has a case-insensitive `when` regular expression, an optional `unless` expression for explicitly scoped questions, and the `question` to return. Review profiles as application configuration and increment the version when business definitions change. The concession profile leaves reporting-day, free-unit, combined waste, and net proceeds policy open. Its rules cover common phrasings, and the model is instructed to clarify other missing definitions.
+CLI flags take precedence over environment values. A profile is a local JSON file with an `id`, `version`, an array of `definitions` with unique `id` and `text` fields, and an ordered `clarifications` array. Every definition is required prompt context. A clarification rule has a case-insensitive `when` regular expression, an optional `unless` expression for explicitly scoped questions, and the `question` to return. Review profiles as application configuration and increment the version when business definitions change. Version 2 of the concession profile makes the completed-only filter explicit for sales unit totals. Reporting-day, free-unit, combined waste, and net proceeds policy remain open. The rules cover common phrasings, and the model is instructed to clarify other missing definitions.
 
 ## Execution and index behavior
 
 Chroma receives explicit vectors from Ollama's `/api/embed` and queries by vector. It stores schema metadata and business definitions without source rows, with telemetry disabled. Each database path and profile ID has a collection. The revision includes the SQLite fingerprint, profile content and version, queryable catalog representation, and embedding endpoint, tag and digest. QueryBridge replaces stale collections within a scope and rebuilds incomplete ones on access. Access to a QueryBridge index directory is serialized with a local lock. Use an index directory dedicated to QueryBridge. [Chroma explicit embeddings](https://docs.trychroma.com/docs/collections/manage-collections#embedding-functions) · [Ollama embedding API](https://docs.ollama.com/api/embed)
 
-`ask` can build the index on demand. It retrieves up to five relation documents and five business definitions, adds declared join paths between selected relations, and presents the result as JSON data to the model. Restricted views, virtual and shadow tables, and virtual generated columns are excluded from the queryable catalog. Very wide relations or large join graphs can exceed the document or prompt budget and return `index_error`.
+`ask` can build the index on demand. It retrieves up to five relation documents by similarity and adds declared join paths between selected relations. The prompt includes every definition from the selected profile in profile order. Restricted views, virtual and shadow tables, and virtual generated columns are excluded from the queryable catalog. The question and context JSON must fit the existing 24 KiB budget. An oversized prompt returns `index_error` before the model is called.
 
 Ollama gets one nonstreaming `/api/chat` request per question that reaches generation, with a JSON Schema in `format`. The application checks the decision's exact fields and bound values, then sends query proposals to the existing restricted connector. The selected schema fingerprint is checked again inside the execution snapshot. QueryBridge returns SQLite values directly. [Ollama chat API](https://docs.ollama.com/api/chat) · [SQLite execution contract](sqlite.md)
+
+QueryBridge asks Ollama to disable prompt truncation and context shifting. If the rendered prompt exceeds the model's context window, a server error is surfaced as `ollama_error` on runtimes that support these controls. QueryBridge requests direct responses on models with a thinking toggle to preserve the bounded output budget for the structured decision. [Ollama 0.40.16 chat request fields](https://github.com/ollama/ollama/blob/v0.40.16/api/types.go#L2362-L2413) · [Ollama thinking controls](https://docs.ollama.com/capabilities/thinking)
 
 Responses with `clarification` or `unsupported` exit successfully without query execution. Operational and generation failures use JSON on stderr with exit code `1`, including `ollama_unavailable`, `model_unavailable`, `ollama_timeout`, `ollama_response_error`, `generation_error`, `index_error`, and `schema_changed`. SQLite policy rejections, invalid SQL, query timeouts, and database failures retain their Phase 1 statuses. Each Ollama response body is capped at 2 MiB. The HTTP deadline applies during connection, request, and response. SQLite uses its own separate deadline.

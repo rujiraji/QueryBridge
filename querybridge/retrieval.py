@@ -146,24 +146,20 @@ class ChromaIndex:
             client.heartbeat()
 
     def retrieve(self, database: Path, schema: DatabaseSchema, profile: BusinessProfile, question: str) -> dict:
+        # The selected profile is authoritative for reporting policies. Similarity
+        # can narrow the schema, but it must not decide which policies apply.
+        definitions = [asdict(item) for item in profile.definitions]
         with self._client() as client:
             collection, _, catalog = self._ensure(client, database, schema, profile)
             if not catalog.relations:
-                return {"relations": [], "relationships": [], "definitions": []}
+                return {"relations": [], "relationships": [], "definitions": definitions}
             vector = self.embeddings.embed([question])
             selected = collection.query(
                 query_embeddings=vector, n_results=min(5, len(catalog.relations)),
                 where={"kind": "relation"}, include=[],
             )["ids"][0]
             relations, edges = catalog.expand([name.removeprefix("relation:") for name in selected])
-            definitions = {f"definition:{item.id}": asdict(item) for item in profile.definitions}
-            matched = (
-                collection.query(
-                    query_embeddings=vector, n_results=min(5, len(definitions)),
-                    where={"kind": "definition"}, include=[],
-                )["ids"][0] if definitions else []
-            )
-        return {"relations": relations, "relationships": edges, "definitions": [definitions[key] for key in matched]}
+        return {"relations": relations, "relationships": edges, "definitions": definitions}
 
     def _ensure(self, client, database: Path, schema: DatabaseSchema, profile: BusinessProfile):
         catalog = _Catalog(schema)

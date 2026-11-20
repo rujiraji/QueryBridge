@@ -13,7 +13,7 @@ from querybridge.connector import (
 from querybridge.decisions import Clarification, GenerationError, Proposal, Unsupported, parse_decision
 from querybridge.pipeline import QueryAnswer, QueryPipeline
 from querybridge.profiles import BusinessDefinition, BusinessProfile, ProfileError
-from querybridge.retrieval import ChromaIndex
+from querybridge.retrieval import ChromaIndex, RetrievalError
 
 from .fixtures import create_concessions, create_library
 from .nl_support import TestEmbeddings
@@ -85,6 +85,36 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("selected_context", json.loads(user))
         self.generator.assert_called_once()
         self.assertEqual(before, self.database.read_bytes())
+
+    def test_paid_units_prompt_includes_the_completed_only_policy(self):
+        question = "How many paid units only were sold at event 1?"
+        sql = (
+            "SELECT sum(i.quantity) FROM sale_transaction_items i "
+            "JOIN sale_transactions t ON t.id = i.transaction_id "
+            "WHERE t.event_id = ? AND t.status = ? AND t.payment_type IN (?, ?)"
+        )
+        self.generator.return_value = proposal(sql, (1, "completed", "cash", "square"))
+        answer = self.pipeline.ask(question)
+
+        self.generator.assert_called_once()
+        prompt = json.loads(self.generator.call_args.args[1])
+        self.assertEqual(prompt["question"], question)
+        definitions = {item["id"]: item["text"] for item in prompt["selected_context"]["definitions"]}
+        self.assertIn("sale_transactions.status = 'completed'", definitions.get("status", ""))
+        self.assertEqual(len(definitions), len(self.profile.definitions))
+        self.assertEqual(answer.result.rows, ((3,),))
+
+    def test_oversized_required_definitions_fail_before_generation(self):
+        self.pipeline.profile = BusinessProfile("large", "1", tuple(
+            BusinessDefinition(f"rule-{n}", "A" * 4_000) for n in range(7)
+        ))
+        self.pipeline.connector = Mock(wraps=self.connector)
+        self.generator.return_value = proposal("SELECT count(*) FROM events")
+        with self.assertRaisesRegex(RetrievalError, "required profile definitions") as failure:
+            self.pipeline.ask("Count the events.")
+        self.assertEqual(failure.exception.code, "index_error")
+        self.generator.assert_not_called()
+        self.pipeline.connector.execute.assert_not_called()
 
     def test_clarification_and_unsupported_do_not_execute(self):
         connector = Mock(wraps=self.connector)
@@ -220,6 +250,38 @@ class IndexTests(unittest.TestCase):
             "table": 'Book "catalog"', "columns": ("district", "branch_code"),
             "referenced_table": "Library branches", "referenced_columns": ("district", "code"),
         }])
+
+    def test_unrelated_profile_includes_a_policy_outside_the_top_five(self):
+        class LibraryEmbeddings:
+            identity = "library-policy-ranking-test"
+
+            def embed(self, texts):
+                return [[0.0, 1.0] if text.startswith("withdrawn:") else [1.0, 0.0] for text in texts]
+
+        question = "How many physical book copies are in circulation?"
+        withdrawn = BusinessDefinition("withdrawn", "Exclude withdrawn book id 104 from circulation totals.")
+        definitions = tuple(
+            BusinessDefinition(f"catalog-{n}", f"Use catalog copies for circulation metric {n}.") for n in range(5)
+        ) + (withdrawn,)
+        profile = BusinessProfile("circulation", "1", definitions)
+        embeddings = LibraryEmbeddings()
+        index = ChromaIndex(self.index.path, embeddings)
+        state = index.index(self.database, self.connector.inspect(), profile)
+        with index._client() as client:
+            collection = client.get_collection(state.collection, embedding_function=None)
+            ranked = collection.query(
+                query_embeddings=embeddings.embed([question]), n_results=5,
+                where={"kind": "definition"}, include=[],
+            )["ids"][0]
+        self.assertEqual(len(ranked), 5)
+        self.assertNotIn("definition:withdrawn", ranked)
+
+        generate = Mock(return_value=proposal('SELECT sum(copies) FROM "Book ""catalog""" WHERE id <> ?', (104,)))
+        answer = QueryPipeline(self.database, self.connector, profile, index, generate).ask(question)
+        generate.assert_called_once()
+        context = json.loads(generate.call_args.args[1])["selected_context"]
+        self.assertEqual(context["definitions"], [{"id": item.id, "text": item.text} for item in definitions])
+        self.assertEqual(answer.result.rows, ((7,),))
 
     def test_retrieval_adds_bridge_not_selected_by_similarity(self):
         db = self.root / "graph.sqlite3"

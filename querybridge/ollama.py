@@ -178,6 +178,9 @@ class OllamaClient:
             "model": model.name,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
             "stream": False,
+            "think": False,
+            "truncate": False,
+            "shift": False,
             "format": decision_schema(),
             "options": {"temperature": 0, "num_ctx": 8192, "num_predict": 1536},
         })

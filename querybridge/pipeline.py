@@ -20,11 +20,14 @@ When a question has missing scope or an undecided business definition, return a
 focused clarification. Never assume a timezone, reporting-day boundary, or reference
 date for relative dates. If the available data cannot answer the question, return
 unsupported and explain what information is missing. Never invent tables, fields,
-values, relationships or metrics. Prefer the declared keys for joins.
+values, relationships or metrics. Check that the query implements each requested
+filter and aggregates at the level defined by the business context. Join on all
+columns of a declared relationship.
 For a query, propose a single SQLite SELECT or read-only WITH statement. Bind user
 values with ? placeholders and an array, or :name placeholders and an object with
-prefix-free keys. Quote identifiers with double quotes when needed. Use only listed
-relations and columns. Virtual generated columns are metadata-only. Virtual and
+prefix-free keys. Wrap table and column identifiers in double quotes, including
+the entire name when it contains spaces. Escape embedded double quotes by doubling
+them. Use only listed relations and columns. Virtual generated columns are metadata-only. Virtual and
 shadow tables, restricted views, internals, PRAGMAs, attachments, writes, transactions,
 extensions and unlisted functions are outside the execution policy. Avoid SELECT *
 when column availability is uncertain. Avoid using SQLite's machine-local timezone.
@@ -74,7 +77,10 @@ class QueryPipeline:
         context = self.index.retrieve(self.database, schema, self.profile, question)
         prompt = encode_json({"question": question, "selected_context": context})
         if len(prompt) > 24_576:
-            raise RetrievalError("The retrieved context exceeds the model input budget. Ask a narrower question.")
+            raise RetrievalError(
+                "The question, retrieved schema, and required profile definitions exceed the model input budget. "
+                "Use a smaller applicable profile or ask a narrower question."
+            )
         decision = parse_decision(self.generate(_SYSTEM, prompt))
         if isinstance(decision, (Clarification, Unsupported)):
             return decision

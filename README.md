@@ -1,6 +1,6 @@
 # QueryBridge
 
-QueryBridge, formerly Usense, lets users ask questions about relational data. The SQLite foundation passed independent review. The Phase 2 local query pipeline is implemented and awaiting independent review, with offline verification complete and live Ollama accuracy unverified.
+QueryBridge, formerly Usense, lets users ask questions about relational data. The SQLite foundation passed independent review. The Phase 2 local query pipeline and its reporting-context fix are awaiting independent review. The evaluation record includes offline checks, live Ollama results, and observed accuracy failures. [Evaluation record](docs/evaluation.md)
 
 ## Run locally
 

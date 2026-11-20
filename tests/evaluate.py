@@ -1,7 +1,9 @@
 """Evaluate synthetic questions by result values and decision kind."""
 
 import argparse
+import json
 import platform
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +47,11 @@ CASES = (
          {"kind": "query", "sql": "SELECT sum(i.revenue_cents) FROM sale_transaction_items i "
           "JOIN products p ON p.id = i.product_id JOIN sale_transactions t ON t.id = i.transaction_id "
           f"WHERE {TERMS} AND p.name = ?", "parameters": [1, "Water"]}),
+    Case("paid-units", "concessions", "How many paid units only were sold at event 1?", ((3,),),
+         {"kind": "query", "sql": "SELECT sum(i.quantity) FROM sale_transaction_items i "
+          "JOIN sale_transactions t ON t.id = i.transaction_id "
+          "WHERE t.event_id = ? AND t.status = ? AND t.payment_type IN (?, ?)",
+          "parameters": [1, "completed", "cash", "square"]}),
     Case("reversals", "concessions", "Count reversed transactions for event 1.", ((1,),),
          {"kind": "query", "sql": "SELECT count(*) FROM sale_transactions WHERE event_id = :event AND status = :status",
           "parameters": {"event": 1, "status": "reversed"}}),
@@ -66,7 +73,8 @@ CASES = (
           'JOIN "Book ""catalog""" c ON c.district = b.district AND c.branch_code = b.code '
           "GROUP BY b.label ORDER BY b.label", "parameters": []}),
     Case("librarian-salary", "library", "What is the average librarian salary?", "unsupported",
-         {"kind": "unsupported", "reason": "The library fixture contains no personnel or salary data."}, focus="salary"),
+         {"kind": "unsupported", "reason": "The library fixture contains no personnel or salary data."},
+         focus=r"\bsalar(?:y|ies)\b"),
 )
 
 
@@ -77,7 +85,6 @@ def run(live: bool, client: OllamaClient | None, generation: str | None, embeddi
         model = client.model(generation)
         embeddings = OllamaEmbeddings(client, embedding)
         print(f"Ollama {client.version()} at {client.identity} | {model.name}@{model.digest} | {embeddings.identity}")
-        generate = lambda system, prompt: client.generate(model, system, prompt)
     else:
         embeddings = TestEmbeddings()
 
@@ -87,6 +94,7 @@ def run(live: bool, client: OllamaClient | None, generation: str | None, embeddi
         databases = {name: root / f"{name}.sqlite3" for name in ("concessions", "library")}
         create_concessions(databases["concessions"])
         create_library(databases["library"])
+        baseline = {name: path.read_bytes() for name, path in databases.items()}
         profiles = {
             "concessions": BusinessProfile.load(Path(__file__).resolve().parents[1] / "profiles/concessions.json"),
             "library": BusinessProfile(),
@@ -98,35 +106,64 @@ def run(live: bool, client: OllamaClient | None, generation: str | None, embeddi
             print(f"{fixture} index {monotonic() - start:.3f}s")
         for case in CASES:
             path = databases[case.fixture]
-            before = path.read_bytes()
-            if not live:
-                raw = encode_json(case.offline_decision)
+            context = None
+            output = None
+            generation_seconds = None
 
-                def generate(system, prompt):
-                    return raw
+            def generate(system, prompt):
+                nonlocal context, output, generation_seconds
+                context = json.loads(prompt)["selected_context"]
+                generation_start = monotonic()
+                try:
+                    output = (client.generate(model, system, prompt) if live else encode_json(case.offline_decision))
+                    return output
+                finally:
+                    generation_seconds = round(monotonic() - generation_start, 3)
 
             pipeline = QueryPipeline(path, SQLiteConnector(path), profiles[case.fixture], store, generate)
             start = monotonic()
             try:
                 answer = pipeline.ask(case.question)
                 if isinstance(answer, Clarification):
-                    correct = case.expected == "clarification" and case.focus in answer.question.casefold()
-                    detail = f"clarification {answer.question}"
+                    correct = case.expected == "clarification" and bool(re.search(case.focus, answer.question, re.I))
+                    detail = {"status": "clarification", "question": answer.question}
                 elif isinstance(answer, Unsupported):
-                    correct = case.expected == "unsupported" and case.focus in answer.reason.casefold()
-                    detail = f"unsupported {answer.reason}"
+                    correct = case.expected == "unsupported" and bool(re.search(case.focus, answer.reason, re.I))
+                    detail = {"status": "unsupported", "reason": answer.reason}
                 else:
                     correct = answer.result.rows == case.expected and not answer.result.truncated
-                    detail = encode_json({"rows": [json_row(row) for row in answer.result.rows],
-                                          "truncated": answer.result.truncated})
+                    detail = {
+                        "status": "query", "sql": answer.result.sql, "parameters": answer.parameters,
+                        "rows": [json_row(row) for row in answer.result.rows], "truncated": answer.result.truncated,
+                    }
             except QueryBridgeError as error:
-                correct, detail = False, f"{error.code} {error}"
-            if path.read_bytes() != before:
-                correct, detail = False, "Source bytes changed."
+                correct, detail = False, {"status": error.code, "message": str(error)}
+            elapsed = round(monotonic() - start, 3)
+            source_preserved = path.read_bytes() == baseline[case.fixture]
+            correct = correct and source_preserved
             passed += correct
-            print(f"{case.id} {'PASS' if correct else 'FAIL'} {monotonic() - start:.3f}s {detail}")
+            if context is not None:
+                source = "ollama" if live else "scripted"
+                detail.update({
+                    "generation_seconds": generation_seconds,
+                    "context": {
+                        "relations": [item["name"] for item in context["relations"]],
+                        "definition_ids": [item["id"] for item in context["definitions"]],
+                        "relationship_count": len(context["relationships"]),
+                    },
+                })
+            else:
+                source = "profile_rule" if detail["status"] == "clarification" else "pipeline_preflight"
             if not correct:
-                print(f"  expected {case.expected!r}" + (f" about {case.focus}" if case.focus else ""))
+                detail.update({"expected": case.expected, "expected_focus": case.focus})
+                if context is not None:
+                    detail["context"] = context
+                if output is not None and detail["status"] not in {"query", "clarification", "unsupported"}:
+                    detail["decision_output"] = output[:8192]
+            print(encode_json({
+                "case": case.id, "passed": correct, "seconds": elapsed, "decision_source": source,
+                "source_preserved": source_preserved, **detail,
+            }))
     print(f"{passed}/{len(CASES)} passed")
     return passed == len(CASES)
 

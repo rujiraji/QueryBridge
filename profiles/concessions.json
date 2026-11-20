@@ -1,6 +1,6 @@
 {
   "id": "concession-tracker",
-  "version": "1",
+  "version": "2",
   "definitions": [
     {
       "id": "event-scope",
@@ -8,19 +8,19 @@
     },
     {
       "id": "recorded-money",
-      "text": "Amounts are integer cents. Use saved sale_transactions total_revenue_cents, total_cost_cents and total_profit_cents or sale_transaction_items revenue_cents, cost_cents and profit_cents for historical figures. Current product prices and current inventory costs are separate. Recorded Square revenue is gross recorded revenue. There is no verified field for Square fees, settlement adjustments, or processor net."
+      "text": "Amounts are integer cents. For whole-event financial totals, sum the saved sale_transactions total_revenue_cents, total_cost_cents and total_profit_cents. For a named product, join sale_transaction_items to products and sale_transactions, filter products.name, and sum the saved item revenue_cents, cost_cents or profit_cents. Current product prices and inventory costs are separate. Recorded Square revenue is gross. There is no verified field for Square fees, settlement adjustments, or processor net."
     },
     {
       "id": "status",
-      "text": "Completed-event reports include only sale_transactions.status = 'completed'. A reversed transaction remains in history with status = 'reversed' and reversed_at set. Undo restores consumed batch quantities. Use completed status for financial summaries unless the question explicitly requests reversal history."
+      "text": "Completed-event reports include only sale_transactions.status = 'completed'. Use that filter for both financial summaries and sales unit totals unless the question explicitly requests reversal history. A reversed transaction remains in history with status = 'reversed' and reversed_at set. Undo restores consumed batch quantities."
     },
     {
       "id": "payments",
-      "text": "Payment types are cash, square, free, and waste. Free and waste use zero recorded revenue and still incur cost and consume inventory. Overall completed-event totals include free and waste costs. Paid transactions are cash and square."
+      "text": "Payment types are cash, square, free, and waste. Free and waste use zero recorded revenue and still incur cost and consume inventory. Overall completed-event totals include free and waste costs. Paid transactions filter payment_type IN ('cash', 'square'). Recorded waste sales filter payment_type = 'waste'."
     },
     {
       "id": "units-and-waste",
-      "text": "The tracker's default product report includes free units and excludes waste. A stakeholder definition of units sold is undecided. Ask whether to count paid units only or include free units when scope is unclear. The tracker waste report counts completed waste sales by product. Manual inventory adjustments and bulk-batch discards are separate, and a combined waste definition is undecided."
+      "text": "For units sold, sum sale_transaction_items.quantity after joining sale_transactions for event, status, and payment filters. A transaction can contain multiple units. The tracker's default product report includes free units and excludes waste. Ask whether to count paid units only or include free units when scope is unclear. The tracker waste report counts completed waste sales by product. Manual inventory adjustments and bulk-batch discards are separate, and a combined waste definition is undecided."
     },
     {
       "id": "stock",

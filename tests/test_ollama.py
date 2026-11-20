@@ -89,6 +89,9 @@ class OllamaTests(unittest.TestCase):
         ])
         self.assertIs(self.requests[1][2]["truncate"], False)
         self.assertIs(self.requests[2][2]["stream"], False)
+        self.assertIs(self.requests[2][2]["think"], False)
+        self.assertIs(self.requests[2][2]["truncate"], False)
+        self.assertIs(self.requests[2][2]["shift"], False)
         self.assertIn("oneOf", self.requests[2][2]["format"])
 
     def test_service_refused_and_remote_origins_are_rejected(self):
