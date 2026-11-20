@@ -14,16 +14,18 @@ python -B -m tests.evaluate
 
 The initial Phase 2 review reproduced 47 passing tests and 10 passing scripted cases. The reviewer found that the paid-unit question could omit the `status` definition from the model prompt. The original retrieval returned five definitions and excluded `status`. Counting cash and Square rows without a status filter gave four units, including the reversed cash sale. Applying the completed-only filter gave three.
 
-With the fix, all 50 unit and integration tests and all 11 scripted cases pass on Windows AMD64 with Python 3.12.13, SQLite 3.50.4, and ChromaDB 1.5.9. The suite uses real temporary Chroma storage, deterministic embeddings, and a fake loopback Ollama server. It verifies the prompt for paid units, an unrelated low-ranking policy, and rejection of an oversized required context. Scripted results verify retrieval, decision handling, and restricted execution.
+The first context fix passed 50 unit and integration tests and 11 scripted cases. The date and event-scope follow-up passed 52 tests and all 13 scripted cases on Windows AMD64 with Python 3.12.13, SQLite 3.50.4, and ChromaDB 1.5.9. The suite uses real temporary Chroma storage, deterministic embeddings, and a fake loopback Ollama server. It covers required profile definitions, oversized context rejection, valid and unresolved UTC intervals, SQLite restrictions, and source preservation. Scripted cases verify pipeline behavior.
 
 | Case | Independent expected result | Offline outcome |
 | --- | --- | --- |
 | Completed event 1 totals | Four records. Revenue 400 + 300 = 700 cents. Cost 120 + 90 + 60 + 180 = 450 cents. Profit 250 cents. | Pass |
+| Completed inactive event 2 totals | One completed Square sale of two popcorn units at 300 cents each. Revenue 600 cents, cost 180 cents, profit 420 cents. Substituting active event 1 produces `[[4,700,450,250]]` instead of `[[1,600,180,420]]`. | Pass |
 | Water revenue | Two paid units at the saved 200 cents each and one free unit yield 400 cents. | Pass |
 | Paid units at event 1 | Two cash units plus one Square unit give three completed paid units. The fourth paid unit was reversed. | Pass |
 | Reversals | One reversed event 1 transaction. | Pass |
 | Recorded waste sales cost | Two wasted units at 90 cents each yield 180 cents. | Pass |
 | Yesterday's revenue | Ask for range, timezone and day boundary. | Pass |
+| Yesterday with explicit UTC bounds | From 2026-06-01 00:00 UTC inclusive to 2026-06-02 00:00 UTC exclusive, the only completed sale across all events is event 2's 600-cent Square sale. The interval reaches generation. | Pass |
 | Units sold | Ask whether to include free units. | Pass |
 | Square sales | Ask for recorded gross or net proceeds. | Pass |
 | Actual Square processing fees | Unsupported because the fixture has no fee records. | Pass |
@@ -32,7 +34,7 @@ With the fix, all 50 unit and integration tests and all 11 scripted cases pass o
 
 The evaluator compares rows, decision kinds, and the topic of each clarification or unsupported response. It checks fixture bytes against their state before indexing. Each case reports its decision source, total latency, and model-call latency when applicable. Query results include SQL and bound parameters. Cases that reach generation record the relation names, definition IDs, and relationship count. Failures include the full selected context and, for execution or parsing failures, the model's decision output.
 
-## Phase 2 live model
+## Earlier 11-case live model evaluation
 
 Live verification ran on November 20, 2026 on Windows 11 25H2 AMD64 (build 26200.9974), with an Intel Core Ultra 7 255H, 31.46 GiB of RAM, and an NVIDIA GeForce RTX 5050 Laptop GPU with 8,151 MiB of VRAM and driver 616.56. The host initially had no Ollama server. We verified the SHA-256 and extracted the official standalone Ollama 0.40.16 ZIP to ignored workspace storage, then started it on `127.0.0.1:11434`. The server reported `Ollama cloud disabled: true` and selected CUDA. Python was 3.12.13, SQLite 3.50.4, and ChromaDB 1.5.9. [Official Windows release](https://github.com/ollama/ollama/releases/tag/v0.40.16)
 
@@ -133,3 +135,46 @@ Parameters `[]`. The local trace `.querybridge-data/phase2-live-qwen35-direct.lo
 ```
 
 </details>
+
+## UTC and inactive-event live rerun
+
+The follow-up ran both previously tested model digests on the same Ollama 0.40.16 CUDA setup with cloud features disabled. The `ready` checks passed. The live commands were:
+
+```powershell
+python -B -u -m tests.evaluate --live --generation-model qwen2.5-coder:7b --embedding-model nomic-embed-text:latest --ollama-timeout 120
+python -B -u -m tests.evaluate --live --generation-model qwen3.5:4b --embedding-model nomic-embed-text:latest --ollama-timeout 120
+```
+
+Qwen 2.5 Coder passed **9/13** cases and Qwen 3.5 passed **10/13**. Each run included three profile-rule clarifications and ten model decisions. Both evaluators exited 1 for the mismatches below. All source-byte checks passed. A separate scripted check deliberately bound event 1 for the inactive-event case and confirmed that the evaluator rejected `[[4,700,450,250]]`.
+
+| Case | Qwen 2.5 Coder result / seconds | Qwen 3.5 result / seconds |
+| --- | --- | --- |
+| Event 1 totals | `[[4,700,450,250]]` / 6.641 | `[[4,700,450,250]]` / 11.375 |
+| Inactive event 2 totals | `[[1,600,180,420]]` / 2.953 | `[[1,600,180,420]]` / 2.391 |
+| Water revenue | Fail, summed all event revenue to 700 cents / 6.375 | Fail, used “Water” as the event name and returned NULL / 2.031 |
+| Paid units | Fail, counted two rows / 2.313 | Fail, counted two rows and substituted the active-event predicate / 2.156 |
+| Reversals | Fail, returned unsupported despite the explicit event ID / 1.593 | `[[1]]` / 1.516 |
+| Recorded waste cost | `[[180]]` / 1.891 | `[[180]]` / 1.859 |
+| Yesterday without bounds | Profile clarification / 0.000 | Profile clarification / 0.000 |
+| Yesterday with explicit UTC bounds | Generated a query yielding `[[600]]` / 2.703 | Generated a query yielding `[[600]]` / 2.578 |
+| Units sold scope | Profile clarification / 0.000 | Profile clarification / 0.000 |
+| Square proceeds scope | Profile clarification / 0.000 | Profile clarification / 0.000 |
+| Square fees | Unsupported / 2.219 | Unsupported / 1.844 |
+| Branch copies | Fail, malformed quoting near `catalog` / 2.672 | Fail, looked for a table named `Book catalog` / 1.672 |
+| Librarian salary | Unsupported / 1.172 | Unsupported / 1.234 |
+
+Both models scoped the inactive event to Summer fair. The exact UTC interval reached both models, and both matched the expected fixture rows. Qwen 2.5 Coder used inclusive `BETWEEN` despite the exclusive end. Qwen 3.5 used `>=` and `<`. Both compared `Z` literals directly with timestamps stored using `+00:00`, which can misclassify rows at a bound. The fixture has its qualifying sale inside the interval, so the score measures the returned rows for this fixture. The scripted query uses `julianday` and a half-open interval.
+
+<details>
+<summary>Generated SQL and bind values for the two new cases</summary>
+
+```jsonl
+{"model":"qwen2.5-coder:7b","case":"inactive-event-totals","sql":"SELECT COUNT(st.id) AS completed_transaction_count, SUM(st.total_revenue_cents) AS recorded_revenue, SUM(st.total_cost_cents) AS total_cost, SUM(st.total_profit_cents) AS recorded_profit FROM sale_transactions st JOIN events e ON st.event_id = e.id WHERE e.name = 'Summer fair' AND st.status = 'completed' AND e.is_active = 0","parameters":[]}
+{"model":"qwen2.5-coder:7b","case":"timezone-resolved","sql":"SELECT SUM(total_revenue_cents) AS total_revenue_cents FROM sale_transactions WHERE status = 'completed' AND created_at BETWEEN '2026-06-01T00:00:00Z' AND '2026-06-02T00:00:00Z'","parameters":[]}
+{"model":"qwen3.5:4b","case":"inactive-event-totals","sql":"SELECT COUNT(*) AS completed_transaction_count, SUM(st.total_revenue_cents) AS recorded_revenue_cents, SUM(st.total_cost_cents) AS total_cost_cents, SUM(st.total_profit_cents) AS recorded_profit_cents FROM sale_transactions st JOIN events e ON st.event_id = e.id WHERE e.name = 'Summer fair' AND st.status = 'completed'","parameters":[]}
+{"model":"qwen3.5:4b","case":"timezone-resolved","sql":"SELECT SUM(st.total_revenue_cents) AS total_revenue_cents FROM sale_transactions st JOIN events e ON st.event_id = e.id WHERE st.status = 'completed' AND st.created_at >= '2026-06-01T00:00:00Z' AND st.created_at < '2026-06-02T00:00:00Z'","parameters":[]}
+```
+
+</details>
+
+The workspace traces `.querybridge-data/phase2-date-scope-qwen2.5-coder-7b.log` and `.querybridge-data/phase2-date-scope-qwen3.5-4b.log` contain the per-case timing, query text, bind values, and failure context.

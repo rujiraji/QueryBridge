@@ -2,6 +2,7 @@
 
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from ._json import decode_json
@@ -10,6 +11,44 @@ from .connector import QueryBridgeError
 
 class ProfileError(QueryBridgeError):
     code = "profile_error"
+
+
+_ISO_TIMESTAMP = (
+    r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?"
+    r"(?:Z|[+-]\d{2}:?\d{2}|\s+UTC)?"
+)
+_TIMESTAMP_INTERVAL = re.compile(
+    r"(?:\b(?P<utc>UTC)\s+(?:range|interval|window|bounds)\s*:?\s*)?"
+    r"(?:(?P<between>\bbetween)\s+|\bfrom\s+|\bstart\s*[:=]\s*)?"
+    rf"(?<![\w:])(?P<start>{_ISO_TIMESTAMP})(?:\s+(?:inclusive|\(inclusive\)))?"
+    r"(?:\s+(?:to|through|until)\s+(?:before\s+)?|\s+(?P<and>and)\s+|\s*/\s*|\s+[-–—]\s+"
+    r"|\s*(?:[,;]\s*|\band\s+)?\bend\s*[:=]?\s*)"
+    rf"(?P<end>{_ISO_TIMESTAMP})(?![\w:+-]|\.\d)",
+    re.IGNORECASE,
+)
+
+
+def _has_utc_interval(question: str) -> bool:
+    for match in _TIMESTAMP_INTERVAL.finditer(question):
+        if match["and"] and not (match["between"] or match["utc"]):
+            continue
+        bounds = []
+        for name in ("start", "end"):
+            text = match[name].upper()
+            if text.endswith("UTC"):
+                text = text[:-3].rstrip() + "+00:00"
+            try:
+                bound = datetime.fromisoformat(text)
+            except ValueError:
+                break
+            if bound.tzinfo is None and match["utc"]:
+                bound = bound.replace(tzinfo=timezone.utc)
+            if bound.tzinfo != timezone.utc:
+                break
+            bounds.append(bound)
+        if len(bounds) == 2 and bounds[0] < bounds[1]:
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -23,11 +62,12 @@ class ClarificationRule:
     when: str
     question: str
     unless: str = ""
+    unless_utc_interval: bool = False
 
     def matches(self, question: str) -> bool:
         return bool(re.search(self.when, question, re.IGNORECASE)) and (
             not self.unless or not re.search(self.unless, question, re.IGNORECASE)
-        )
+        ) and not (self.unless_utc_interval and _has_utc_interval(question))
 
 
 @dataclass(frozen=True)
@@ -62,11 +102,17 @@ class BusinessProfile:
                 raise ValueError("Definition IDs must be unique.")
             rules = []
             for item in value["clarifications"]:
-                if not isinstance(item, dict) or item.keys() not in ({"when", "question"}, {"when", "unless", "question"}):
-                    raise ValueError("Clarifications require when, question, and optionally unless.")
+                required = {"when", "question"}
+                if (not isinstance(item, dict) or not required <= item.keys()
+                        or item.keys() - required - {"unless", "unless_utc_interval"}):
+                    raise ValueError("Clarifications require when and question, with optional unless or unless_utc_interval.")
+                unless_utc_interval = item.get("unless_utc_interval", False)
+                if not isinstance(unless_utc_interval, bool):
+                    raise ValueError("unless_utc_interval must be a boolean.")
                 rule = ClarificationRule(
                     _string(item["when"], 512), _string(item["question"], 1024),
                     _string(item["unless"], 512) if "unless" in item else "",
+                    unless_utc_interval=unless_utc_interval,
                 )
                 re.compile(rule.when, re.IGNORECASE)
                 re.compile(rule.unless, re.IGNORECASE)

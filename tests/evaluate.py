@@ -36,12 +36,19 @@ class Case:
 
 
 TERMS = "event_id = ? AND status = 'completed'"
+EVENT_TOTALS = (
+    "SELECT count(*), sum(total_revenue_cents), sum(total_cost_cents), "
+    f"sum(total_profit_cents) FROM sale_transactions WHERE {TERMS}"
+)
 CASES = (
     Case("event-totals", "concessions",
          "For the Fall fair (event 1), give completed transaction count, recorded revenue, total cost and "
          "recorded profit in that order, with money in cents.", ((4, 700, 450, 250),),
-         {"kind": "query", "sql": "SELECT count(*), sum(total_revenue_cents), sum(total_cost_cents), "
-          f"sum(total_profit_cents) FROM sale_transactions WHERE {TERMS}", "parameters": [1]}),
+         {"kind": "query", "sql": EVENT_TOTALS, "parameters": [1]}),
+    Case("inactive-event-totals", "concessions",
+         "For inactive event 2 (Summer fair), give completed transaction count, recorded revenue, total cost "
+         "and recorded profit in that order, with money in cents.", ((1, 600, 180, 420),),
+         {"kind": "query", "sql": EVENT_TOTALS, "parameters": [2]}),
     Case("water-revenue", "concessions",
          "What was the recorded revenue in cents for Water in completed transactions at event 1?", ((400,),),
          {"kind": "query", "sql": "SELECT sum(i.revenue_cents) FROM sale_transaction_items i "
@@ -61,6 +68,12 @@ CASES = (
           "AND payment_type = ?", "parameters": [1, "waste"]}),
     Case("timezone", "concessions", "How much recorded revenue did event 1 make yesterday?", "clarification",
          {"kind": "clarification", "question": "Which timestamps and timezone should I use?"}, focus="timezone"),
+    Case("timezone-resolved", "concessions",
+         "What was the recorded revenue in cents across all events for completed transactions yesterday? "
+         "Use the UTC interval from 2026-06-01T00:00:00Z inclusive to 2026-06-02T00:00:00Z exclusive.", ((600,),),
+         {"kind": "query", "sql": "SELECT sum(total_revenue_cents) FROM sale_transactions WHERE status = 'completed' "
+          "AND julianday(created_at) >= julianday(?) AND julianday(created_at) < julianday(?)",
+          "parameters": ["2026-06-01T00:00:00Z", "2026-06-02T00:00:00Z"]}),
     Case("units-scope", "concessions", "How many units were sold at event 1?", "clarification",
          {"kind": "clarification", "question": "Should I include free units?"}, focus="free"),
     Case("square-scope", "concessions", "What were Square sales at event 1?", "clarification",

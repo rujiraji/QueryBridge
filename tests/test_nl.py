@@ -116,6 +116,47 @@ class PipelineTests(unittest.TestCase):
         self.generator.assert_not_called()
         self.pipeline.connector.execute.assert_not_called()
 
+    def test_yesterday_with_explicit_utc_bounds_reaches_generation(self):
+        sql = (
+            "SELECT sum(total_revenue_cents) FROM sale_transactions WHERE status = 'completed' "
+            "AND julianday(created_at) >= julianday(?) AND julianday(created_at) < julianday(?)"
+        )
+        self.generator.return_value = proposal(sql, ("2026-06-01T00:00:00Z", "2026-06-02T00:00:00Z"))
+        for interval in (
+            "from 2026-06-01T00:00:00Z inclusive to 2026-06-02T00:00:00Z exclusive",
+            "between 2026-06-01T00:00:00+00:00 and 2026-06-02T00:00:00+00:00",
+            "start: 2026-06-01 00:00 UTC, end: 2026-06-02 00:00 UTC",
+            "UTC interval from 2026-06-01 00:00 to 2026-06-02 00:00",
+        ):
+            with self.subTest(interval=interval):
+                self.generator.reset_mock()
+                question = f"How much completed revenue did we record yesterday ({interval})?"
+                answer = self.pipeline.ask(question)
+                self.generator.assert_called_once()
+                self.assertEqual(json.loads(self.generator.call_args.args[1])["question"], question)
+                self.assertEqual(answer.result.rows, ((600,),))
+
+    def test_yesterday_with_incomplete_or_invalid_bounds_clarifies(self):
+        connector = Mock(wraps=self.connector)
+        self.pipeline.connector = connector
+        for interval in (
+            "",
+            " in UTC",
+            " starting 2026-06-01T00:00:00Z",
+            " from 2026-06-01 00:00 to 2026-06-02 00:00",
+            " from 2026-06-01T00:00:00Z to 2026-06-02T00:00:00",
+            " mentioning 2026-06-01T00:00:00Z and 2026-06-02T00:00:00Z",
+            " from 2026-06-02T00:00:00Z to 2026-06-01T00:00:00Z",
+            " from 2026-06-01T00:00:00Z to 2026-06-01T00:00:00Z",
+            " from 2026-02-30T00:00:00Z to 2026-03-01T00:00:00Z",
+        ):
+            with self.subTest(interval=interval):
+                answer = self.pipeline.ask(f"How much revenue did we record yesterday{interval}?")
+                self.assertIsInstance(answer, Clarification)
+                self.assertIn("timezone", answer.question)
+        self.generator.assert_not_called()
+        connector.execute.assert_not_called()
+
     def test_clarification_and_unsupported_do_not_execute(self):
         connector = Mock(wraps=self.connector)
         self.pipeline.connector = connector

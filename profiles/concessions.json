@@ -1,6 +1,6 @@
 {
   "id": "concession-tracker",
-  "version": "2",
+  "version": "3",
   "definitions": [
     {
       "id": "event-scope",
@@ -28,17 +28,19 @@
     },
     {
       "id": "calendar",
-      "text": "Sale and reversal timestamps are stored as UTC ISO 8601 text. A reporting timezone, reference date for relative expressions, and business day boundary have not been chosen. Ask for explicit start/end timestamps or a UTC calendar range. Apply only the calendar interpretation explicitly provided. SQLite's local timezone is machine-specific."
+      "text": "Sale and reversal timestamps are stored as UTC ISO 8601 text. When the question supplies an exact UTC start and end interval, use those bounds as given, including when the question labels the interval yesterday. Otherwise, ask for any missing date range, reporting timezone or day boundary. Apply only the calendar interpretation explicitly provided. SQLite's local timezone is machine-specific."
     }
   ],
   "clarifications": [
     {
       "when": "\\b(today|yesterday|tomorrow|last night|the weekend|this weekend|last weekend|this week|last week|this month|last month|this year|last year|week to date|month to date|year to date|(?:past|last) \\d+ (?:days|weeks))\\b",
+      "unless_utc_interval": true,
       "question": "What exact start and end dates or timestamps, timezone, and reporting-day boundary should I use?"
     },
     {
       "when": "\\b(?:calendar day|daily|per day|\\d{4}-\\d{2}-\\d{2}|(?:on|in|during|since|until) (?:January|February|March|April|May|June|July|August|September|October|November|December))\\b",
       "unless": "\\bUTC\\b|\\d{2}:\\d{2}(?::\\d{2})?(?:Z|[+-]\\d{2}:\\d{2})\\b",
+      "unless_utc_interval": true,
       "question": "Which timezone and reporting-day boundary should I use for those dates, or what are the exact UTC start and end timestamps?"
     },
     {
