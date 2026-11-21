@@ -4,10 +4,11 @@ import re
 from datetime import datetime, timezone
 
 
-_AWARE_ISO = re.compile(
+_ISO_DATETIME = (
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt ][0-9]{2}:[0-9]{2}"
-    r"(?::[0-9]{2}(?:\.[0-9]{1,6})?)?(?:[Zz]|[+-][0-9]{2}:[0-5][0-9])"
+    r"(?::[0-9]{2}(?:\.[0-9]{1,6})?)?"
 )
+_AWARE_ISO = re.compile(_ISO_DATETIME + r"(?:[Zz]|[+-][0-9]{2}:[0-5][0-9])")
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 

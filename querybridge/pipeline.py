@@ -82,7 +82,10 @@ class QueryPipeline:
             return Unsupported("The selected database has no queryable tables or views.")
 
         context = self.index.retrieve(self.database, schema, self.profile, question)
-        prompt = encode_json({"question": question, "selected_context": context})
+        prompt = encode_json({
+            "question": self.profile.generation_question(question),
+            "selected_context": context,
+        })
         if len(prompt) > 24_576:
             raise RetrievalError(
                 "The question, retrieved schema, and required profile definitions exceed the model input budget. "

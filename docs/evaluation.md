@@ -181,7 +181,7 @@ The workspace traces `.querybridge-data/phase2-date-scope-qwen2.5-coder-7b.log` 
 
 ## Accuracy hardening after the Phase 2 merge
 
-This work starts from merged `main` at `f4190c0321ff79eb82a9ad70d828aeeedf793d6a` and awaits independent review. On Linux x86_64 with Python 3.12.14, SQLite 3.53.1, and ChromaDB 1.5.9, the following passed:
+The initial accuracy draft at `ad2c237f9383c73f1fa769770e87b9bd6ee8b46c` builds on merged `main` at `f4190c0321ff79eb82a9ad70d828aeeedf793d6a`. On Linux x86_64 with Python 3.12.14, SQLite 3.53.1, and ChromaDB 1.5.9, the following passed:
 
 ```sh
 python -B -m unittest discover -v  # 59 tests
@@ -222,15 +222,37 @@ Expected revenue is **100 + 600 + 400 = 1100 cents**. Listing IDs independently 
 
 `tests.test_evaluate` replays 11 deliberately wrong decisions and requires the evaluator to reject each one while preserving source bytes. They include both recorded date predicates, an inclusive end after normalization, Julian-day precision loss, omitted product filters, a product name used as an event, row counts substituted for quantities, reversed paid units, active-event substitutions, and removed identifier quotes. No model is called during these replays.
 
-### Fresh live evaluation pending
+### Full live run on the initial accuracy draft
 
-This execution environment has no Ollama runtime or model cache. The earlier **9/13** and **10/13** results describe commit `d3f21e0` and remain historical. They do not measure the new prompt, helper usage, or expanded 21-case evaluation. The remaining product, quantity, quoting, reversal, and boundary errors are not declared resolved by the offline results.
+The 21-case runs below used `ad2c237` on Linux CPU with Ollama 0.40.16, cloud features disabled, and the model digests listed above. Each run reached the generator for 18 questions and answered three with clarification rules. Every source-byte check passed. The original 13 cases have the same questions and expected results as the earlier Windows GPU runs at `d3f21e0`.
 
-Rerun from this branch in the existing local model workspace, retaining the recorded model digests and cloud-disabled setup:
+| Model | 21 cases | Original 13 cases | Remaining failures on this run |
+| --- | ---: | ---: | --- |
+| `qwen2.5-coder:7b` | 16/21 | 12/13 | Water revenue, three boundary ID lists, Water units including free sales |
+| `qwen3.5:4b` | 15/21 | 10/13 | Reversals, both explicit-date revenue cases, library quoting, event 1 microsecond window, Water units including free sales |
+
+Both models returned three paid units. Both dropped the Water filter for Water units including free sales and returned four instead of three. Qwen 2.5 Coder filtered the three all-event row listings to the active event. Qwen 3.5 compared text timestamps with integer bounds in the two revenue cases and returned `NULL`.
+
+These commands run the full suite with the recorded model tags and embedding model.
 
 ```powershell
 python -B -u -m tests.evaluate --live --generation-model qwen2.5-coder:7b --embedding-model nomic-embed-text:latest --ollama-timeout 120
 python -B -u -m tests.evaluate --live --generation-model qwen3.5:4b --embedding-model nomic-embed-text:latest --ollama-timeout 120
 ```
 
-Use repeated `--case` flags for a focused rerun, for example `--case utc-boundary-revenue --case microsecond-window --case paid-product-units --case branch-copies`. Full runs now contain 18 model decisions and three profile-rule clarifications. Record the case outcomes, model digests, SQL, parameters, timings, and source-byte results before making an accuracy comparison.
+Use repeated `--case` flags for a focused rerun, for example `--case utc-boundary-revenue --case microsecond-window --case paid-product-units --case branch-copies`.
+
+### UTC formatting and wide schema follow-up
+
+The follow-up normalizes validated UTC bounds before generation. A scripted generator binds the bounds directly from the prompt and returns 1,100 cents for the boundary fixture with `Z`, `+00:00`, `+0000`, a trailing `UTC`, and a UTC range label. A final-microsecond query returns 400 cents. The test also checks the original question sent to embeddings and verifies the fixture bytes.
+
+The 150-column test table produced a 13,015-byte embedding document on `ad2c237`, crossing the 12,000-byte application limit. Moving quoted names out of the document reduced it to 7,140 bytes. Ollama still rejected that document because the tested `nomic-embed-text` model has a 2,048-token context. With a column-name-to-type map, the document is 4,740 bytes and the live `index` command indexed both fixture tables. A test uses the escaped prompt identifiers to query a table in that fixture.
+
+On the follow-up, `python -B -m unittest discover -v` passed **60 tests**, and `python -B -m tests.evaluate` passed **21/21 scripted cases**.
+
+The focused live checks reused the same three model digests and cloud-disabled Ollama 0.40.16 on Linux CPU. The `ask` CLI used the UTC-suffix version of the boundary revenue question and the library branch-copies question. Every source-byte check passed.
+
+| Generation model | UTC-suffix revenue | Quoted library table |
+| --- | --- | --- |
+| `qwen2.5-coder:7b` | `[[1100]]` in 56.637 s | `[["North",2],["South",6]]` in 14.994 s |
+| `qwen3.5:4b` | `[[null]]` in 36.858 s. SQL converted the bounds and compared them with the raw timestamp text. | `invalid_query` in 15.702 s. SQL misquoted the table name. |

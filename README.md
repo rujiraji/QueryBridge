@@ -1,6 +1,6 @@
 # QueryBridge
 
-QueryBridge, formerly Usense, lets users ask questions about relational data. The SQLite foundation and experimental local query pipeline have been merged after independent review. Accuracy work adds exact UTC comparisons, quoted schema identifiers, and stronger evaluation fixtures. Fresh live model results for these changes are pending. [Evaluation record](docs/evaluation.md)
+QueryBridge, formerly Usense, lets users ask questions about relational data. The SQLite foundation and experimental local query pipeline have been merged after independent review. Accuracy work adds exact UTC comparisons, quoted schema identifiers, and stronger evaluation fixtures. The evaluation record includes live model results and remaining reporting errors. [Evaluation record](docs/evaluation.md)
 
 ## Run locally
 
