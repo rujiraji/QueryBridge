@@ -7,16 +7,14 @@ from pathlib import Path
 
 from ._json import decode_json
 from .connector import QueryBridgeError
+from .temporal import _ISO_DATETIME
 
 
 class ProfileError(QueryBridgeError):
     code = "profile_error"
 
 
-_ISO_TIMESTAMP = (
-    r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?"
-    r"(?:Z|[+-]\d{2}:?\d{2}|\s+UTC)?"
-)
+_ISO_TIMESTAMP = _ISO_DATETIME + r"(?:Z|[+-][0-9]{2}:?[0-5][0-9]|\s+UTC)?"
 _TIMESTAMP_INTERVAL = re.compile(
     r"(?:\b(?P<utc>UTC)\s+(?:range|interval|window|bounds)\s*:?\s*)?"
     r"(?:(?P<between>\bbetween)\s+|\bfrom\s+|\bstart\s*[:=]\s*)?"
@@ -28,27 +26,30 @@ _TIMESTAMP_INTERVAL = re.compile(
 )
 
 
+def _utc_bounds(match: re.Match[str]) -> tuple[datetime, datetime] | None:
+    range_is_utc = match["utc"] is not None
+    if match["and"] and not (match["between"] or range_is_utc):
+        return None
+    bounds = []
+    for name in ("start", "end"):
+        text = match[name].upper()
+        if text.endswith("UTC"):
+            text = text[:-3].rstrip() + "+00:00"
+        try:
+            bound = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        if bound.tzinfo is None and range_is_utc:
+            bound = bound.replace(tzinfo=timezone.utc)
+        if bound.tzinfo != timezone.utc:
+            return None
+        bounds.append(bound)
+    start, end = bounds
+    return (start, end) if start < end else None
+
+
 def _has_utc_interval(question: str) -> bool:
-    for match in _TIMESTAMP_INTERVAL.finditer(question):
-        if match["and"] and not (match["between"] or match["utc"]):
-            continue
-        bounds = []
-        for name in ("start", "end"):
-            text = match[name].upper()
-            if text.endswith("UTC"):
-                text = text[:-3].rstrip() + "+00:00"
-            try:
-                bound = datetime.fromisoformat(text)
-            except ValueError:
-                break
-            if bound.tzinfo is None and match["utc"]:
-                bound = bound.replace(tzinfo=timezone.utc)
-            if bound.tzinfo != timezone.utc:
-                break
-            bounds.append(bound)
-        if len(bounds) == 2 and bounds[0] < bounds[1]:
-            return True
-    return False
+    return any(_utc_bounds(match) is not None for match in _TIMESTAMP_INTERVAL.finditer(question))
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,25 @@ class BusinessProfile:
 
     def clarify(self, question: str) -> str | None:
         return next((rule.question for rule in self.clarifications if rule.matches(question)), None)
+
+    def generation_question(self, question: str) -> str:
+        """Write validated bounds in the timestamp format accepted by SQLite queries."""
+        if not any(rule.unless_utc_interval for rule in self.clarifications):
+            return question
+
+        parts = []
+        previous_end = 0
+        for match in _TIMESTAMP_INTERVAL.finditer(question):
+            bounds = _utc_bounds(match)
+            if bounds is None:
+                continue
+            for name, bound in zip(("start", "end"), bounds):
+                start, end = match.span(name)
+                parts.append(question[previous_end:start])
+                parts.append(bound.isoformat().removesuffix("+00:00") + "Z")
+                previous_end = end
+        parts.append(question[previous_end:])
+        return "".join(parts)
 
     @classmethod
     def load(cls, path: Path) -> "BusinessProfile":

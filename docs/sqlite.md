@@ -12,9 +12,24 @@ Both kinds of generated columns appear in the catalog and their expressions are 
 
 ## Restricted execution
 
-SQLite opens the selected file with `mode=ro`. The connector enables `query_only` and defensive mode, disables trusted schema and extension loading, and gives the connection zero attachment slots. A trusted catalog read supplies the relation list in the same transaction the query uses. The authorizer then permits SELECT and recursive CTE actions, reads of supported objects in `main`, and a set of built-ins for reporting. SQLite checks view dependencies under the same policy. `execute` accepts a single statement through Python's `sqlite3` interface. [SQLite URI filenames](https://www.sqlite.org/uri.html) · [Python sqlite3 execution](https://docs.python.org/3.12/library/sqlite3.html#sqlite3.Cursor.execute)
+SQLite opens the selected file with `mode=ro`. The connector enables `query_only` and defensive mode, disables trusted schema and extension loading, and gives the connection zero attachment slots. A trusted catalog read supplies the relation list in the same transaction the query uses. The authorizer then permits SELECT and recursive CTE actions, reads of supported objects in `main`, reporting built-ins, and the exact timestamp helper `qb_utc_us`. SQLite checks view dependencies under the same policy. `execute` accepts a single statement through Python's `sqlite3` interface. [SQLite URI filenames](https://www.sqlite.org/uri.html) · [Python sqlite3 execution](https://docs.python.org/3.12/library/sqlite3.html#sqlite3.Cursor.execute)
 
-The policy covers ordinary joins, filters, aggregates, subqueries, `VALUES`, and read-only CTEs. Use double quotes for identifiers and single quotes for string literals. This also applies to views as SQLite resolves them. The allowed functions are listed in `querybridge/sqlite.py`. Examples include `sum`, `count`, `round`, `coalesce`, `strftime`, `lower`, and `row_number`. SQLite version and build determine function availability. Application-specific collations and functions are outside the connector's scope. The policy rejects writes, schema and transaction commands, PRAGMAs, attachments, extension loading, and direct access to virtual and internal objects. Phase 1 exposes permitted columns in the selected file and has whole-file access scope.
+The policy covers ordinary joins, filters, aggregates, subqueries, `VALUES`, and read-only CTEs. Use double quotes for identifiers and single quotes for string literals. This also applies to views as SQLite resolves them. The allowed functions are listed in `querybridge/sqlite.py`. Examples include `sum`, `count`, `round`, `coalesce`, `strftime`, `lower`, and `row_number`. SQLite version and build determine built-in availability. QueryBridge registers its own timestamp helper; other application-specific collations and functions are not loaded. The policy rejects writes, schema and transaction commands, PRAGMAs, attachments, extension loading, and direct access to virtual and internal objects. The connector exposes permitted columns in the selected file and has whole-file access scope.
+
+## Exact UTC comparisons
+
+`qb_utc_us(value)` returns integer microseconds since `1970-01-01T00:00:00Z`. It accepts offset-aware ISO date-times with `Z` or `+/-HH:MM`, a `T` or space separator, minute or second precision, and at most six fractional-second digits. Offset forms representing the same instant compare equally. Negative values represent instants before the epoch. Invalid text, missing offsets, unsupported precision, non-text values, and SQL `NULL` return `NULL`; the helper never assumes a local timezone. Comparisons involving those `NULL` values do not match a WHERE predicate.
+
+For a caller-specified inclusive start and exclusive end, normalize both the column and the bound parameters:
+
+```sql
+WHERE qb_utc_us("created_at") >= qb_utc_us(:start_utc)
+  AND qb_utc_us("created_at") < qb_utc_us(:end_utc)
+```
+
+This preserves adjacent microseconds and avoids comparing `Z` text with `+00:00` text. SQLite date functions have coarser fractional precision for these cases. The helper is registered on QueryBridge's connections, so exported SQL using it requires the same registration in another SQLite client. It does not install anything in the source file. It remains unavailable inside untrusted source views under `trusted_schema=OFF`. Normalizing a source column can require a scan; the existing SQLite deadline still applies. [SQLite date precision](https://www.sqlite.org/lang_datefunc.html) · [Python function registration](https://docs.python.org/3.12/library/sqlite3.html#sqlite3.Connection.create_function)
+
+## Limits and results
 
 The default deadline is 5 seconds, with a SQLite progress handler and elapsed-time checks during setup and retrieval. The connection reports lock contention immediately. SQLite's progress handler is cooperative and cannot impose a hard deadline on an individual native call or filesystem operation. SQLite limits SQL to 64 KiB and strings, BLOBs, and row encodings to at most 4 MiB during query execution. [SQLite progress callbacks](https://www.sqlite.org/c3ref/progress_handler.html) · [SQLite limits](https://www.sqlite.org/limits.html)
 

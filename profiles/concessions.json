@@ -1,6 +1,6 @@
 {
   "id": "concession-tracker",
-  "version": "3",
+  "version": "4",
   "definitions": [
     {
       "id": "event-scope",
@@ -8,7 +8,7 @@
     },
     {
       "id": "recorded-money",
-      "text": "Amounts are integer cents. For whole-event financial totals, sum the saved sale_transactions total_revenue_cents, total_cost_cents and total_profit_cents. For a named product, join sale_transaction_items to products and sale_transactions, filter products.name, and sum the saved item revenue_cents, cost_cents or profit_cents. Current product prices and inventory costs are separate. Recorded Square revenue is gross. There is no verified field for Square fees, settlement adjustments, or processor net."
+      "text": "Amounts are integer cents. For whole-event financial totals, sum the saved sale_transactions total_revenue_cents, total_cost_cents and total_profit_cents. For a named product, join sale_transaction_items to products and sale_transactions, filter products.name, and sum the saved item revenue_cents, cost_cents or profit_cents. A product name filters products.name; the requested event filters sale_transactions.event_id. Named-product revenue pattern with bound event_id and product_name: SELECT SUM(\"i\".\"revenue_cents\") FROM \"sale_transaction_items\" AS \"i\" JOIN \"sale_transactions\" AS \"t\" ON \"t\".\"id\" = \"i\".\"transaction_id\" JOIN \"products\" AS \"p\" ON \"p\".\"id\" = \"i\".\"product_id\" WHERE \"t\".\"event_id\" = :event_id AND \"t\".\"status\" = 'completed' AND \"p\".\"name\" = :product_name; Current product prices and inventory costs are separate. Recorded Square revenue is gross. There is no verified field for Square fees, settlement adjustments, or processor net."
     },
     {
       "id": "status",
@@ -20,7 +20,7 @@
     },
     {
       "id": "units-and-waste",
-      "text": "For units sold, sum sale_transaction_items.quantity after joining sale_transactions for event, status, and payment filters. A transaction can contain multiple units. The tracker's default product report includes free units and excludes waste. Ask whether to count paid units only or include free units when scope is unclear. The tracker waste report counts completed waste sales by product. Manual inventory adjustments and bulk-batch discards are separate, and a combined waste definition is undecided."
+      "text": "For units sold, sum sale_transaction_items.quantity after joining sale_transactions for event, status, and payment filters. COUNT(*) counts line rows and does not measure quantity. Paid-unit pattern with a bound event_id: SELECT SUM(\"i\".\"quantity\") FROM \"sale_transaction_items\" AS \"i\" JOIN \"sale_transactions\" AS \"t\" ON \"t\".\"id\" = \"i\".\"transaction_id\" WHERE \"t\".\"event_id\" = :event_id AND \"t\".\"status\" = 'completed' AND \"t\".\"payment_type\" IN ('cash','square'); For a named product, also join products and filter products.name. The tracker's default product report includes free units and excludes waste. Ask whether to count paid units only or include free units when scope is unclear. The tracker waste report counts completed waste sales by product. Manual inventory adjustments and bulk-batch discards are separate, and a combined waste definition is undecided."
     },
     {
       "id": "stock",
@@ -28,7 +28,7 @@
     },
     {
       "id": "calendar",
-      "text": "Sale and reversal timestamps are stored as UTC ISO 8601 text. When the question supplies an exact UTC start and end interval, use those bounds as given, including when the question labels the interval yesterday. Otherwise, ask for any missing date range, reporting timezone or day boundary. Apply only the calendar interpretation explicitly provided. SQLite's local timezone is machine-specific."
+      "text": "Sale and reversal timestamps are stored as UTC ISO 8601 text with microseconds. Use qb_utc_us on both the saved timestamp and each bound for exact comparisons across Z and +00:00 forms. For an inclusive start and exclusive end use qb_utc_us(\"created_at\") >= qb_utc_us(:start_utc) AND qb_utc_us(\"created_at\") < qb_utc_us(:end_utc). BETWEEN includes both ends. SQLite's julianday and datetime functions can collapse distinct microseconds. When the question supplies an exact UTC start and end interval, use those bounds as given, including when it labels the interval yesterday. Otherwise, ask for any missing date range, reporting timezone or day boundary. Apply only the calendar interpretation explicitly provided. SQLite's local timezone is machine-specific."
     }
   ],
   "clarifications": [

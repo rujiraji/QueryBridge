@@ -21,7 +21,7 @@ from querybridge.pipeline import QueryPipeline
 from querybridge.profiles import BusinessProfile
 from querybridge.retrieval import ChromaIndex
 
-from .fixtures import create_concessions, create_library
+from .fixtures import create_concessions, create_library, create_utc_boundaries
 from .nl_support import TestEmbeddings
 
 
@@ -72,7 +72,7 @@ CASES = (
          "What was the recorded revenue in cents across all events for completed transactions yesterday? "
          "Use the UTC interval from 2026-06-01T00:00:00Z inclusive to 2026-06-02T00:00:00Z exclusive.", ((600,),),
          {"kind": "query", "sql": "SELECT sum(total_revenue_cents) FROM sale_transactions WHERE status = 'completed' "
-          "AND julianday(created_at) >= julianday(?) AND julianday(created_at) < julianday(?)",
+          "AND qb_utc_us(created_at) >= qb_utc_us(?) AND qb_utc_us(created_at) < qb_utc_us(?)",
           "parameters": ["2026-06-01T00:00:00Z", "2026-06-02T00:00:00Z"]}),
     Case("units-scope", "concessions", "How many units were sold at event 1?", "clarification",
          {"kind": "clarification", "question": "Should I include free units?"}, focus="free"),
@@ -88,10 +88,58 @@ CASES = (
     Case("librarian-salary", "library", "What is the average librarian salary?", "unsupported",
          {"kind": "unsupported", "reason": "The library fixture contains no personnel or salary data."},
          focus=r"\bsalar(?:y|ies)\b"),
+    Case("utc-boundary-revenue", "utc-boundaries",
+         "What was the recorded revenue in cents across all events for completed transactions yesterday? "
+         "Use the UTC interval from 2026-06-01T00:00:00Z inclusive to 2026-06-02T00:00:00Z exclusive.", ((1100,),),
+         {"kind": "query", "sql": "SELECT sum(total_revenue_cents) FROM sale_transactions WHERE status = 'completed' "
+          "AND qb_utc_us(created_at) >= qb_utc_us(?) AND qb_utc_us(created_at) < qb_utc_us(?)",
+          "parameters": ["2026-06-01T00:00:00Z", "2026-06-02T00:00:00Z"]}),
+    Case("utc-boundary-rows", "utc-boundaries",
+         "List the completed transaction ids across all events from 2026-06-01T00:00:00Z inclusive "
+         "to 2026-06-02T00:00:00Z exclusive, ordered by transaction id.", ((105,), (106,), (110,)),
+         {"kind": "query", "sql": "SELECT id FROM sale_transactions WHERE status = 'completed' "
+          "AND qb_utc_us(created_at) >= qb_utc_us(?) AND qb_utc_us(created_at) < qb_utc_us(?) ORDER BY id",
+          "parameters": ["2026-06-01T00:00:00Z", "2026-06-02T00:00:00Z"]}),
+    Case("utc-start-microsecond", "utc-boundaries",
+         "List completed transaction ids across all events from 2026-06-01T00:00:00Z inclusive "
+         "to 2026-06-01T00:00:00.000001Z exclusive, ordered by transaction id.", ((106,),),
+         {"kind": "query", "sql": "SELECT id FROM sale_transactions WHERE status = 'completed' "
+          "AND qb_utc_us(created_at) >= qb_utc_us(?) AND qb_utc_us(created_at) < qb_utc_us(?) ORDER BY id",
+          "parameters": ["2026-06-01T00:00:00Z", "2026-06-01T00:00:00.000001Z"]}),
+    Case("utc-end-microsecond", "utc-boundaries",
+         "List completed transaction ids across all events from 2026-06-01T23:59:59.999999Z inclusive "
+         "to 2026-06-02T00:00:00Z exclusive, ordered by transaction id.", ((110,),),
+         {"kind": "query", "sql": "SELECT id FROM sale_transactions WHERE status = 'completed' "
+          "AND qb_utc_us(created_at) >= qb_utc_us(?) AND qb_utc_us(created_at) < qb_utc_us(?) ORDER BY id",
+          "parameters": ["2026-06-01T23:59:59.999999Z", "2026-06-02T00:00:00Z"]}),
+    Case("microsecond-window", "concessions",
+         "List completed transaction ids for event 1 from 2026-09-01T16:00:00.000002Z inclusive "
+         "to 2026-09-01T16:00:00.000004Z exclusive, ordered by transaction id.", ((101,), (102,)),
+         {"kind": "query", "sql": "SELECT id FROM sale_transactions WHERE event_id = ? AND status = 'completed' "
+          "AND qb_utc_us(created_at) >= qb_utc_us(?) AND qb_utc_us(created_at) < qb_utc_us(?) ORDER BY id",
+          "parameters": [1, "2026-09-01T16:00:00.000002Z", "2026-09-01T16:00:00.000004Z"]}),
+    Case("paid-product-units", "concessions", "How many paid units only of Water were sold at event 1?", ((2,),),
+         {"kind": "query", "sql": "SELECT sum(i.quantity) FROM sale_transaction_items i "
+          "JOIN sale_transactions t ON t.id = i.transaction_id JOIN products p ON p.id = i.product_id "
+          "WHERE t.event_id = ? AND t.status = 'completed' AND t.payment_type IN ('cash', 'square') AND p.name = ?",
+          "parameters": [1, "Water"]}),
+    Case("free-product-units", "concessions",
+         "How many Water units were sold at event 1 including free units and excluding waste sales?", ((3,),),
+         {"kind": "query", "sql": "SELECT sum(i.quantity) FROM sale_transaction_items i "
+          "JOIN sale_transactions t ON t.id = i.transaction_id JOIN products p ON p.id = i.product_id "
+          "WHERE t.event_id = ? AND t.status = 'completed' AND t.payment_type <> 'waste' AND p.name = ?",
+          "parameters": [1, "Water"]}),
+    Case("inactive-paid-units", "concessions", "How many paid units only were sold at inactive event 2?", ((2,),),
+         {"kind": "query", "sql": "SELECT sum(i.quantity) FROM sale_transaction_items i "
+          "JOIN sale_transactions t ON t.id = i.transaction_id "
+          "WHERE t.event_id = ? AND t.status = 'completed' AND t.payment_type IN ('cash', 'square')",
+          "parameters": [2]}),
 )
 
 
-def run(live: bool, client: OllamaClient | None, generation: str | None, embedding: str | None) -> bool:
+def run(live: bool, client: OllamaClient | None, generation: str | None, embedding: str | None,
+        *, cases: tuple[Case, ...] | None = None) -> bool:
+    cases = CASES if cases is None else cases
     print(f"{'live' if live else 'offline scripted'} | Python {platform.python_version()} | "
           f"SQLite {sqlite3.sqlite_version} | Chroma {chromadb.__version__} | {platform.system()} {platform.machine()}")
     if live:
@@ -104,20 +152,21 @@ def run(live: bool, client: OllamaClient | None, generation: str | None, embeddi
     passed = 0
     with TemporaryDirectory() as temporary:
         root = Path(temporary)
-        databases = {name: root / f"{name}.sqlite3" for name in ("concessions", "library")}
-        create_concessions(databases["concessions"])
-        create_library(databases["library"])
+        creators = {"concessions": create_concessions, "utc-boundaries": create_utc_boundaries, "library": create_library}
+        databases = {case.fixture: root / f"{case.fixture}.sqlite3" for case in cases}
+        for name, path in databases.items():
+            creators[name](path)
         baseline = {name: path.read_bytes() for name, path in databases.items()}
+        concession_profile = BusinessProfile.load(Path(__file__).resolve().parents[1] / "profiles/concessions.json")
         profiles = {
-            "concessions": BusinessProfile.load(Path(__file__).resolve().parents[1] / "profiles/concessions.json"),
-            "library": BusinessProfile(),
+            name: BusinessProfile() if name == "library" else concession_profile for name in databases
         }
         store = ChromaIndex(root / "chroma", embeddings)
         for fixture, path in databases.items():
             start = monotonic()
             store.index(path, SQLiteConnector(path).inspect(), profiles[fixture])
             print(f"{fixture} index {monotonic() - start:.3f}s")
-        for case in CASES:
+        for case in cases:
             path = databases[case.fixture]
             context = None
             output = None
@@ -177,8 +226,8 @@ def run(live: bool, client: OllamaClient | None, generation: str | None, embeddi
                 "case": case.id, "passed": correct, "seconds": elapsed, "decision_source": source,
                 "source_preserved": source_preserved, **detail,
             }))
-    print(f"{passed}/{len(CASES)} passed")
-    return passed == len(CASES)
+    print(f"{passed}/{len(cases)} passed")
+    return passed == len(cases)
 
 
 if __name__ == "__main__":
@@ -188,12 +237,15 @@ if __name__ == "__main__":
     parser.add_argument("--ollama-timeout", type=float, default=60)
     parser.add_argument("--generation-model")
     parser.add_argument("--embedding-model")
+    parser.add_argument("--case", action="append", choices=[case.id for case in CASES],
+                        help="Run only selected case IDs; repeat for multiple cases")
     args = parser.parse_args()
     if args.live and (not args.generation_model or not args.embedding_model):
         parser.error("Live evaluation needs --generation-model and --embedding-model.")
     try:
         client = OllamaClient(args.ollama_url, args.ollama_timeout) if args.live else None
-        success = run(args.live, client, args.generation_model, args.embedding_model)
+        selected = tuple(case for case in CASES if case.id in args.case) if args.case else CASES
+        success = run(args.live, client, args.generation_model, args.embedding_model, cases=selected)
     except QueryBridgeError as error:
         parser.exit(1, f"{error.code} {error}\n")
     raise SystemExit(0 if success else 1)

@@ -13,7 +13,7 @@ from typing import Protocol
 from ._json import encode_json
 from .connector import DatabaseSchema, QueryBridgeError, Relation
 from .profiles import BusinessProfile
-from .sqlite import _SQLITE_CASE_MAP
+from .sqlite import _SQLITE_CASE_MAP, _quote_identifier
 
 
 class RetrievalError(QueryBridgeError):
@@ -55,6 +55,19 @@ def _relation_data(relation: Relation) -> dict:
             for column in relation.columns if column.kind in ("ordinary", "stored_generated")
         ],
         "primary_key": relation.primary_key,
+    }
+
+
+def _prompt_relation(relation: dict) -> dict:
+    return {
+        "name": relation["name"],
+        "sql_name": _quote_identifier(relation["name"]),
+        "kind": relation["kind"],
+        "columns": [
+            {"name": column["name"], "sql_name": _quote_identifier(column["name"]), "type": column["type"]}
+            for column in relation["columns"]
+        ],
+        "primary_key": relation["primary_key"],
     }
 
 
@@ -159,7 +172,11 @@ class ChromaIndex:
                 where={"kind": "relation"}, include=[],
             )["ids"][0]
             relations, edges = catalog.expand([name.removeprefix("relation:") for name in selected])
-        return {"relations": relations, "relationships": edges, "definitions": definitions}
+        return {
+            "relations": [_prompt_relation(relation) for relation in relations],
+            "relationships": edges,
+            "definitions": definitions,
+        }
 
     def _ensure(self, client, database: Path, schema: DatabaseSchema, profile: BusinessProfile):
         catalog = _Catalog(schema)
@@ -167,7 +184,10 @@ class ChromaIndex:
         name = f"qb-{scope}"
         documents = {
             f"relation:{table}": ("relation", encode_json({
-                **data, "declared_relationships": [
+                **data,
+                # Preserve each column's type without repeating field labels in the model input.
+                "columns": {column["name"]: column["type"] for column in data["columns"]},
+                "declared_relationships": [
                     asdict(edge) for edge in catalog.edges if table in (edge.table, edge.referenced_table)
                 ],
             }))

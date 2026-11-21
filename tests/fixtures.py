@@ -57,6 +57,37 @@ def create_concessions(path: Path) -> None:
     """)
 
 
+def create_utc_boundaries(path: Path) -> None:
+    """Extend a separate fixture, leaving historical concession cases intact."""
+    create_concessions(path)
+    # The June 1 interval includes original sale 105 (600 cents), sale 106 at
+    # the inclusive start (100), and 110 one microsecond before the end (400).
+    # Exclude 108 just before the start (50), 107 at the end (200), and 109
+    # just after it (25). Independent expected revenue: 600 + 100 + 400 = 1100.
+    rows = (
+        (106, "2026-06-01T00:00:00+00:00", 100),
+        (107, "2026-06-02T00:00:00+00:00", 200),
+        (108, "2026-05-31T23:59:59.999999Z", 50),
+        (109, "2026-06-02T00:00:00.000001+00:00", 25),
+        (110, "2026-06-01T23:59:59.999999Z", 400),
+    )
+    try:
+        with closing(sqlite3.connect(path)) as connection:
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.executemany(
+                "INSERT INTO sale_transactions VALUES (?, 2, 'cash', ?, 0, ?, 'completed', ?, NULL)",
+                [(identity, revenue, revenue, timestamp) for identity, timestamp, revenue in rows],
+            )
+            connection.executemany(
+                "INSERT INTO sale_transaction_items VALUES (?, ?, 10, 1, ?, 0, ?, 0, ?)",
+                [(identity, identity, revenue, revenue, revenue) for identity, _, revenue in rows],
+            )
+            connection.commit()
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+
+
 def create_library(path: Path) -> None:
     _create(path, '''
         CREATE TABLE "Library branches" (
@@ -108,8 +139,8 @@ def _create(path: Path, sql: str) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("fixture", choices=("concessions", "library"))
+    parser.add_argument("fixture", choices=("concessions", "utc-boundaries", "library"))
     parser.add_argument("path", type=Path)
     args = parser.parse_args()
-    creators = {"concessions": create_concessions, "library": create_library}
+    creators = {"concessions": create_concessions, "utc-boundaries": create_utc_boundaries, "library": create_library}
     creators[args.fixture](args.path)

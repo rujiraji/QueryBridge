@@ -12,6 +12,7 @@ from stat import S_ISREG
 from time import monotonic
 
 from ._json import encode_json, json_row
+from .temporal import utc_microseconds
 from .connector import (
     Column,
     DatabaseError,
@@ -38,7 +39,7 @@ _SQLITE_CASE_MAP = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnop
 
 # These built-ins cover typical reporting queries. SQLite also requires its
 # own trusted-schema checks to pass when a function is invoked from a view.
-_FUNCTIONS = frozenset({
+_BUILTIN_FUNCTIONS = frozenset({
     "abs", "avg", "coalesce", "concat", "concat_ws", "count", "date", "datetime",
     "dense_rank", "first_value", "glob", "group_concat", "ifnull", "instr",
     "julianday", "lag", "last_value", "lead", "length", "like", "lower", "ltrim",
@@ -46,6 +47,7 @@ _FUNCTIONS = frozenset({
     "strftime", "string_agg", "substr", "substring", "sum", "time", "total",
     "trim", "typeof", "unixepoch", "upper",
 })
+_FUNCTIONS = _BUILTIN_FUNCTIONS | {"qb_utc_us"}
 
 
 class SQLiteConnector:
@@ -161,6 +163,7 @@ def _read_snapshot(database: Path, deadline: _Deadline) -> Iterator[sqlite3.Conn
             cached_statements=0,
         )) as connection:
             connection.row_factory = sqlite3.Row
+            connection.create_function("qb_utc_us", 1, utc_microseconds, deterministic=True)
             connection.set_progress_handler(deadline.expired, 1_000)
             connection.setconfig(sqlite3.SQLITE_DBCONFIG_DEFENSIVE, True)
             connection.setconfig(sqlite3.SQLITE_DBCONFIG_DQS_DML, False)

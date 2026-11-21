@@ -1,4 +1,5 @@
 import json
+import re
 import sqlite3
 import unittest
 from contextlib import closing
@@ -15,7 +16,7 @@ from querybridge.pipeline import QueryAnswer, QueryPipeline
 from querybridge.profiles import BusinessDefinition, BusinessProfile, ProfileError
 from querybridge.retrieval import ChromaIndex, RetrievalError
 
-from .fixtures import create_concessions, create_library
+from .fixtures import create_concessions, create_library, create_utc_boundaries
 from .nl_support import TestEmbeddings
 
 
@@ -116,25 +117,50 @@ class PipelineTests(unittest.TestCase):
         self.generator.assert_not_called()
         self.pipeline.connector.execute.assert_not_called()
 
-    def test_yesterday_with_explicit_utc_bounds_reaches_generation(self):
+    def test_generation_can_bind_the_accepted_utc_bounds_as_written(self):
+        database = self.root / "utc-boundaries.sqlite3"
+        create_utc_boundaries(database)
+        before = database.read_bytes()
+        pipeline = QueryPipeline(database, SQLiteConnector(database), self.profile, self.index, self.generator)
         sql = (
             "SELECT sum(total_revenue_cents) FROM sale_transactions WHERE status = 'completed' "
-            "AND julianday(created_at) >= julianday(?) AND julianday(created_at) < julianday(?)"
+            "AND qb_utc_us(created_at) >= qb_utc_us(?) AND qb_utc_us(created_at) < qb_utc_us(?)"
         )
-        self.generator.return_value = proposal(sql, ("2026-06-01T00:00:00Z", "2026-06-02T00:00:00Z"))
-        for interval in (
-            "from 2026-06-01T00:00:00Z inclusive to 2026-06-02T00:00:00Z exclusive",
-            "between 2026-06-01T00:00:00+00:00 and 2026-06-02T00:00:00+00:00",
-            "start: 2026-06-01 00:00 UTC, end: 2026-06-02 00:00 UTC",
-            "UTC interval from 2026-06-01 00:00 to 2026-06-02 00:00",
+
+        def bind_prompt_bounds(system, prompt):
+            self.assertIn("qb_utc_us", system)
+            question = json.loads(prompt)["question"]
+            bounds = re.findall(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{6})?Z", question)
+            return proposal(sql, bounds)
+
+        self.generator.side_effect = bind_prompt_bounds
+        june_start, june_end = "2026-06-01T00:00:00Z", "2026-06-02T00:00:00Z"
+        for phrase, spelling, bounds, revenue in (
+            ("from {} inclusive to {} exclusive", (june_start, june_end), (june_start, june_end), 1100),
+            ("between {} and {}", ("2026-06-01T00:00:00+00:00", "2026-06-02T00:00:00+00:00"),
+             (june_start, june_end), 1100),
+            ("start: {}, end: {}", ("2026-06-01 00:00 UTC", "2026-06-02 00:00 UTC"),
+             (june_start, june_end), 1100),
+            ("UTC interval from {} inclusive to {} exclusive", ("2026-06-01 00:00", "2026-06-02 00:00"),
+             (june_start, june_end), 1100),
+            ("from {} to {}", ("2026-06-01T00:00:00+0000", "2026-06-02T00:00:00+0000"),
+             (june_start, june_end), 1100),
+            ("from {} inclusive to {} exclusive", ("2026-06-01 23:59:59.999999 UTC", "2026-06-02 00:00 UTC"),
+             ("2026-06-01T23:59:59.999999Z", june_end), 400),
         ):
+            interval = phrase.format(*spelling)
             with self.subTest(interval=interval):
                 self.generator.reset_mock()
-                question = f"How much completed revenue did we record yesterday ({interval})?"
-                answer = self.pipeline.ask(question)
+                template = "How much completed revenue did we record yesterday ({})?"
+                question = template.format(interval)
+                answer = pipeline.ask(question)
                 self.generator.assert_called_once()
-                self.assertEqual(json.loads(self.generator.call_args.args[1])["question"], question)
-                self.assertEqual(answer.result.rows, ((600,),))
+                model_question = json.loads(self.generator.call_args.args[1])["question"]
+                self.assertEqual(model_question, template.format(phrase.format(*bounds)))
+                self.assertEqual(self.embeddings.calls[-1], (question,))
+                self.assertEqual(answer.parameters, bounds)
+                self.assertEqual(answer.result.rows, ((revenue,),))
+        self.assertEqual(database.read_bytes(), before)
 
     def test_yesterday_with_incomplete_or_invalid_bounds_clarifies(self):
         connector = Mock(wraps=self.connector)
@@ -149,6 +175,8 @@ class PipelineTests(unittest.TestCase):
             " from 2026-06-02T00:00:00Z to 2026-06-01T00:00:00Z",
             " from 2026-06-01T00:00:00Z to 2026-06-01T00:00:00Z",
             " from 2026-02-30T00:00:00Z to 2026-03-01T00:00:00Z",
+            " from 2026-06-01T00:00:00.0000001Z to 2026-06-02T00:00:00Z",
+            " from 2026-06-01T00:00:00Z to 2026-06-02T00:00:00.0000001Z",
         ):
             with self.subTest(interval=interval):
                 answer = self.pipeline.ask(f"How much revenue did we record yesterday{interval}?")
@@ -291,6 +319,58 @@ class IndexTests(unittest.TestCase):
             "table": 'Book "catalog"', "columns": ("district", "branch_code"),
             "referenced_table": "Library branches", "referenced_columns": ("district", "code"),
         }])
+
+    def test_prompt_provides_executable_identifiers_with_embedded_quotes(self):
+        with closing(sqlite3.connect(self.database)) as writer:
+            writer.execute('ALTER TABLE "Book ""catalog""" ADD COLUMN "shelf ""label""" TEXT')
+            writer.execute('UPDATE "Book ""catalog""" SET "shelf ""label""" = ? WHERE id = ?', ("Reading room", 103))
+            writer.commit()
+
+        def generate(system, prompt):
+            self.assertIn("sql_name", system)
+            context = json.loads(prompt)["selected_context"]
+            books = next(item for item in context["relations"] if item["name"] == 'Book "catalog"')
+            columns = {item["name"]: item["sql_name"] for item in books["columns"]}
+            self.assertEqual(books["sql_name"], '"Book ""catalog"""')
+            self.assertEqual(columns['shelf "label"'], '"shelf ""label"""')
+            shelf = columns['shelf "label"']
+            return proposal(f'SELECT {shelf} FROM {books["sql_name"]} WHERE {columns["id"]} = ?', (103,))
+
+        answer = QueryPipeline(self.database, self.connector, BusinessProfile(), self.index, generate).ask(
+            "What shelf label belongs to book id 103?"
+        )
+        self.assertEqual(answer.result.rows, (("Reading room",),))
+
+    def test_wide_schema_keeps_sql_names_out_of_the_embedding_documents(self):
+        database = self.root / "wide.sqlite3"
+        columns = ", ".join(f"archive_attribute_{number:03} TEXT" for number in range(150))
+        with closing(sqlite3.connect(database, autocommit=True)) as writer:
+            writer.execute(f"CREATE TABLE archive ({columns})")
+            writer.execute('CREATE TABLE "Active ""events""" (id INTEGER PRIMARY KEY)')
+            writer.execute('INSERT INTO "Active ""events""" (id) VALUES (1)')
+        before = database.read_bytes()
+
+        connector = SQLiteConnector(database)
+        profile = BusinessProfile()
+        indexed = self.index.index(database, connector.inspect(), profile)
+        self.assertEqual(indexed.documents, 2)
+        with self.index._client() as client:
+            collection = client.get_collection(indexed.collection, embedding_function=None)
+            stored = collection.get(ids=["relation:archive"], include=["documents"])["documents"][0]
+        self.assertEqual(json.loads(stored)["columns"], {
+            f"archive_attribute_{number:03}": "TEXT" for number in range(150)
+        })
+        self.assertNotIn('"sql_name"', stored)
+
+        def generate(_system, prompt):
+            relations = {item["name"]: item for item in json.loads(prompt)["selected_context"]["relations"]}
+            self.assertEqual(relations["archive"]["columns"][-1]["sql_name"], '"archive_attribute_149"')
+            table = relations['Active "events"']["sql_name"]
+            return proposal(f"SELECT count(*) FROM {table}")
+
+        pipeline = QueryPipeline(database, connector, profile, self.index, generate)
+        self.assertEqual(pipeline.ask("Count the active events.").result.rows, ((1,),))
+        self.assertEqual(database.read_bytes(), before)
 
     def test_unrelated_profile_includes_a_policy_outside_the_top_five(self):
         class LibraryEmbeddings:
