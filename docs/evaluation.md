@@ -178,3 +178,59 @@ Both models scoped the inactive event to Summer fair. The exact UTC interval rea
 </details>
 
 The workspace traces `.querybridge-data/phase2-date-scope-qwen2.5-coder-7b.log` and `.querybridge-data/phase2-date-scope-qwen3.5-4b.log` contain the per-case timing, query text, bind values, and failure context.
+
+## Accuracy hardening after the Phase 2 merge
+
+This work starts from merged `main` at `f4190c0321ff79eb82a9ad70d828aeeedf793d6a` and awaits independent review. On Linux x86_64 with Python 3.12.14, SQLite 3.53.1, and ChromaDB 1.5.9, the following passed:
+
+```sh
+python -B -m unittest discover -v  # 59 tests
+python -B -m tests.evaluate       # 21/21 scripted cases
+```
+
+Every evaluator source-byte check passed. The original 13 questions and their expected results remain unchanged. The scripted date decision now uses `qb_utc_us` to preserve microseconds. Eight added cases cover exact boundaries, adjacent microseconds, product quantities, and inactive-event quantities. The suite still uses real temporary Chroma storage and a fake local HTTP server. These are offline integration results, not new model accuracy measurements.
+
+`uv build --wheel` also passed. The wheel was installed without the `nl` extra into a separate environment and invoked from outside the checkout with Python's isolated mode. Its query CLI returned boundary IDs `[[105],[106],[110]]`; the profile's named-product and paid-unit SQL patterns returned `[[400]]` and `[[3]]`. Each check preserved its fixture bytes. A focused `--case utc-start-microsecond --case inactive-paid-units` evaluator run passed 2/2 cases.
+
+The prompt now supplies a `sql_name` for each relation and column, including executable escaping for embedded quotes. The concession profile remains seven definitions and advances to version 4 with parameterized product and paid-unit examples. All definitions remain required context. A tested prompt can copy both `"Book ""catalog"""` and a column such as `"shelf ""label"""` into executable SQL. The timestamp helper supplies exact integer arithmetic; generation still has to choose a correct predicate.
+
+### Boundary ledger
+
+The separate `utc-boundaries` fixture extends a copy of the original concessions fixture. For `[2026-06-01T00:00:00Z, 2026-06-02T00:00:00Z)`, its expected rows are independently specified:
+
+| Transaction | Stored timestamp | Revenue cents | Included |
+| --- | --- | ---: | --- |
+| 108 | `2026-05-31T23:59:59.999999Z` | 50 | No |
+| 106 | `2026-06-01T00:00:00+00:00` | 100 | Yes |
+| 105 | `2026-06-01T16:00:00.000001+00:00` | 600 | Yes |
+| 110 | `2026-06-01T23:59:59.999999Z` | 400 | Yes |
+| 107 | `2026-06-02T00:00:00+00:00` | 200 | No |
+| 109 | `2026-06-02T00:00:00.000001+00:00` | 25 | No |
+
+Expected revenue is **100 + 600 + 400 = 1100 cents**. Listing IDs independently catches omissions and extra rows even if their money totals happen to cancel.
+
+| Added case | Expected rows |
+| --- | --- |
+| UTC boundary revenue | `[[1100]]` |
+| UTC boundary IDs, ordered by ID | `[[105],[106],[110]]` |
+| First microsecond of the interval | `[[106]]` |
+| Last microsecond of the interval | `[[110]]` |
+| Event 1 interval `[16:00:00.000002Z,16:00:00.000004Z)` on September 1 | `[[101],[102]]` |
+| Paid Water units at event 1 | `[[2]]` |
+| Water units including free and excluding waste at event 1 | `[[3]]` |
+| Paid units at inactive event 2 | `[[2]]` |
+
+`tests.test_evaluate` replays 11 deliberately wrong decisions and requires the evaluator to reject each one while preserving source bytes. They include both recorded date predicates, an inclusive end after normalization, Julian-day precision loss, omitted product filters, a product name used as an event, row counts substituted for quantities, reversed paid units, active-event substitutions, and removed identifier quotes. No model is called during these replays.
+
+### Fresh live evaluation pending
+
+This execution environment has no Ollama runtime or model cache. The earlier **9/13** and **10/13** results describe commit `d3f21e0` and remain historical. They do not measure the new prompt, helper usage, or expanded 21-case evaluation. The remaining product, quantity, quoting, reversal, and boundary errors are not declared resolved by the offline results.
+
+Rerun from this branch in the existing local model workspace, retaining the recorded model digests and cloud-disabled setup:
+
+```powershell
+python -B -u -m tests.evaluate --live --generation-model qwen2.5-coder:7b --embedding-model nomic-embed-text:latest --ollama-timeout 120
+python -B -u -m tests.evaluate --live --generation-model qwen3.5:4b --embedding-model nomic-embed-text:latest --ollama-timeout 120
+```
+
+Use repeated `--case` flags for a focused rerun, for example `--case utc-boundary-revenue --case microsecond-window --case paid-product-units --case branch-copies`. Full runs now contain 18 model decisions and three profile-rule clarifications. Record the case outcomes, model digests, SQL, parameters, timings, and source-byte results before making an accuracy comparison.

@@ -119,7 +119,7 @@ class PipelineTests(unittest.TestCase):
     def test_yesterday_with_explicit_utc_bounds_reaches_generation(self):
         sql = (
             "SELECT sum(total_revenue_cents) FROM sale_transactions WHERE status = 'completed' "
-            "AND julianday(created_at) >= julianday(?) AND julianday(created_at) < julianday(?)"
+            "AND qb_utc_us(created_at) >= qb_utc_us(?) AND qb_utc_us(created_at) < qb_utc_us(?)"
         )
         self.generator.return_value = proposal(sql, ("2026-06-01T00:00:00Z", "2026-06-02T00:00:00Z"))
         for interval in (
@@ -133,6 +133,7 @@ class PipelineTests(unittest.TestCase):
                 question = f"How much completed revenue did we record yesterday ({interval})?"
                 answer = self.pipeline.ask(question)
                 self.generator.assert_called_once()
+                self.assertIn("qb_utc_us", self.generator.call_args.args[0])
                 self.assertEqual(json.loads(self.generator.call_args.args[1])["question"], question)
                 self.assertEqual(answer.result.rows, ((600,),))
 
@@ -291,6 +292,27 @@ class IndexTests(unittest.TestCase):
             "table": 'Book "catalog"', "columns": ("district", "branch_code"),
             "referenced_table": "Library branches", "referenced_columns": ("district", "code"),
         }])
+
+    def test_prompt_provides_executable_identifiers_with_embedded_quotes(self):
+        with closing(sqlite3.connect(self.database)) as writer:
+            writer.execute('ALTER TABLE "Book ""catalog""" ADD COLUMN "shelf ""label""" TEXT')
+            writer.execute('UPDATE "Book ""catalog""" SET "shelf ""label""" = ? WHERE id = ?', ("Reading room", 103))
+            writer.commit()
+
+        def generate(system, prompt):
+            self.assertIn("sql_name", system)
+            context = json.loads(prompt)["selected_context"]
+            books = next(item for item in context["relations"] if item["name"] == 'Book "catalog"')
+            columns = {item["name"]: item["sql_name"] for item in books["columns"]}
+            self.assertEqual(books["sql_name"], '"Book ""catalog"""')
+            self.assertEqual(columns['shelf "label"'], '"shelf ""label"""')
+            shelf = columns['shelf "label"']
+            return proposal(f'SELECT {shelf} FROM {books["sql_name"]} WHERE {columns["id"]} = ?', (103,))
+
+        answer = QueryPipeline(self.database, self.connector, BusinessProfile(), self.index, generate).ask(
+            "What shelf label belongs to book id 103?"
+        )
+        self.assertEqual(answer.result.rows, (("Reading room",),))
 
     def test_unrelated_profile_includes_a_policy_outside_the_top_five(self):
         class LibraryEmbeddings:

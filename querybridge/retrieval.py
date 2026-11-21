@@ -13,7 +13,7 @@ from typing import Protocol
 from ._json import encode_json
 from .connector import DatabaseSchema, QueryBridgeError, Relation
 from .profiles import BusinessProfile
-from .sqlite import _SQLITE_CASE_MAP
+from .sqlite import _SQLITE_CASE_MAP, _quote_identifier
 
 
 class RetrievalError(QueryBridgeError):
@@ -49,9 +49,9 @@ def _digest(value: object) -> str:
 
 def _relation_data(relation: Relation) -> dict:
     return {
-        "name": relation.name, "kind": relation.kind,
+        "name": relation.name, "sql_name": _quote_identifier(relation.name), "kind": relation.kind,
         "columns": [
-            {"name": column.name, "type": column.declared_type}
+            {"name": column.name, "sql_name": _quote_identifier(column.name), "type": column.declared_type}
             for column in relation.columns if column.kind in ("ordinary", "stored_generated")
         ],
         "primary_key": relation.primary_key,

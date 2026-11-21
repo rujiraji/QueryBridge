@@ -1,6 +1,6 @@
 # QueryBridge
 
-QueryBridge, formerly Usense, lets users ask questions about relational data. The SQLite foundation passed independent review. The Phase 2 local query pipeline and its reporting-context fix are awaiting independent review. The evaluation record includes offline checks, live Ollama results, and observed accuracy failures. [Evaluation record](docs/evaluation.md)
+QueryBridge, formerly Usense, lets users ask questions about relational data. The SQLite foundation and experimental local query pipeline have been merged after independent review. Accuracy work adds exact UTC comparisons, quoted schema identifiers, and stronger evaluation fixtures. Fresh live model results for these changes are pending. [Evaluation record](docs/evaluation.md)
 
 ## Run locally
 
@@ -10,7 +10,7 @@ For the local model and retrieval workflows, install `python -m pip install ".[n
 
 ## Verify Phase 1
 
-Run the original SQLite tests with `python -B -m unittest tests.test_sqlite tests.test_concessions -v`. With the `nl` extra installed, `python -B -m unittest discover -v` also covers the local pipeline. [Evaluation results](docs/evaluation.md)
+Run the SQLite tests with `python -B -m unittest tests.test_sqlite tests.test_concessions tests.test_temporal -v`. With the `nl` extra installed, `python -B -m unittest discover -v` also covers the local pipeline and regression replays. `python -B -m tests.evaluate` runs 21 scripted cases; add `--case utc-boundary-revenue` to run a selected case. [Evaluation results](docs/evaluation.md)
 
 Create a disposable concession fixture at a fresh path and inspect it. The inspection lists the four fixture tables and their declared keys, with a schema fingerprint.
 

@@ -9,7 +9,7 @@ from .connector import QueryBridgeError, QueryResult
 from .decisions import BindValue, Clarification, Unsupported, parse_decision
 from .profiles import BusinessProfile
 from .retrieval import ChromaIndex, RetrievalError
-from .sqlite import SQLiteConnector, _FUNCTIONS
+from .sqlite import SQLiteConnector, _BUILTIN_FUNCTIONS
 
 
 _SYSTEM = """Produce exactly one JSON decision matching the supplied response schema.
@@ -25,13 +25,20 @@ filter and aggregates at the level defined by the business context. Join on all
 columns of a declared relationship.
 For a query, propose a single SQLite SELECT or read-only WITH statement. Bind user
 values with ? placeholders and an array, or :name placeholders and an object with
-prefix-free keys. Wrap table and column identifiers in double quotes, including
-the entire name when it contains spaces. Escape embedded double quotes by doubling
-them. Use only listed relations and columns. Virtual generated columns are metadata-only. Virtual and
+prefix-free keys. Copy each relation's and column's supplied sql_name verbatim
+when referring to that identifier. These strings already include SQL double quotes
+and escaped embedded quotes. Quote aliases separately. Use only listed relations
+and columns. Virtual generated columns are metadata-only. Virtual and
 shadow tables, restricted views, internals, PRAGMAs, attachments, writes, transactions,
 extensions and unlisted functions are outside the execution policy. Avoid SELECT *
 when column availability is uncertain. Avoid using SQLite's machine-local timezone.
-Allowed built-in functions (subject to the installed SQLite version): """ + ", ".join(sorted(_FUNCTIONS))
+For exact timestamp comparisons, the connection provides qb_utc_us(value). It returns
+integer UTC microseconds for an ISO date-time with an explicit Z or +/-HH:MM offset
+and up to six fractional digits. It returns NULL for invalid, naive, or unsupported
+values. Normalize both the source timestamp and each bound with qb_utc_us. Use >=
+for an inclusive start and < for an exclusive end. Text comparisons can disagree
+between Z and +00:00, and SQLite date functions can lose subsecond precision.
+Allowed built-in functions (subject to the installed SQLite version): """ + ", ".join(sorted(_BUILTIN_FUNCTIONS))
 
 
 class QuestionError(QueryBridgeError):
