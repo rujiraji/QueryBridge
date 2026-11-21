@@ -256,3 +256,88 @@ The focused live checks reused the same three model digests and cloud-disabled O
 | --- | --- | --- |
 | `qwen2.5-coder:7b` | `[[1100]]` in 56.637 s | `[["North",2],["South",6]]` in 14.994 s |
 | `qwen3.5:4b` | `[[null]]` in 36.858 s. SQL converted the bounds and compared them with the raw timestamp text. | `invalid_query` in 15.702 s. SQL misquoted the table name. |
+
+### Windows verification of draft PR #3
+
+The working tree was clean. After `git fetch origin`, `git switch --track origin/feature/reporting-accuracy` checked out `03be65d7c37a602051d9adb6cb4b97073c0cc566`. GitHub confirmed that exact draft head against `main`. The tests below ran on that commit with Windows AMD64, Python 3.12.13, SQLite 3.50.4, ChromaDB 1.5.9, and Ollama 0.40.16 on an NVIDIA GeForce RTX 5050 Laptop GPU. The server logged `Ollama cloud disabled: true`, and `/api/tags` matched all three manifest SHA-256 digests above.
+
+```powershell
+python -B -m unittest discover -v
+python -B -m tests.evaluate
+```
+
+All **60 tests** and **21/21 scripted cases** passed. Every scripted fixture-byte check passed. The questions and expected results for the original 13 cases match their definitions at `d3f21e0`.
+
+#### Focused CLI checks
+
+The normal `python -B -m querybridge` CLI used a recording loopback relay that forwarded its requests to the local Ollama server. The following direct commands reproduce the requests using the same fixtures and model settings. Set `$boundary` to a database created by `python -B -m tests.fixtures utc-boundaries PATH` and `$wide` to a disposable database with the 150 archive columns from `test_wide_schema_keeps_sql_names_out_of_the_embedding_documents` and a quoted table with one row.
+
+```powershell
+$question = 'What was the recorded revenue in cents across all events for completed transactions from 2026-06-01 00:00 UTC inclusive to 2026-06-02 00:00 UTC exclusive?'
+foreach ($model in @('qwen2.5-coder:7b', 'qwen3.5:4b')) {
+    python -B -m querybridge ask $boundary $question --profile profiles/concessions.json --generation-model $model --embedding-model nomic-embed-text:latest --ollama-timeout 120
+}
+python -B -m querybridge index $wide --embedding-model nomic-embed-text:latest --ollama-timeout 120
+```
+
+- Both recorded generation prompts contained `2026-06-01T00:00:00Z inclusive to 2026-06-02T00:00:00Z exclusive`. Qwen 2.5 Coder returned `[[1100]]` by generating `qb_utc_us("t"."created_at") >= qb_utc_us(:start_utc) AND qb_utc_us("t"."created_at") < qb_utc_us(:end_utc)` with `{"start_utc":"2026-06-01T00:00:00Z","end_utc":"2026-06-02T00:00:00Z"}`.
+- Qwen 3.5 returned `[[null]]` for the same normalized question. Its SQL used `"t"."created_at" >= qb_utc_us('2026-06-01T00:00:00Z') AND "t"."created_at" < qb_utc_us('2026-06-02T00:00:00Z')` with `[]` binds. The comparison mixed raw timestamp text with integer bounds. Both CLI responses were untruncated.
+- The real `nomic-embed-text:latest` endpoint indexed both wide-fixture relations. The captured archive embedding input was 4,740 UTF-8 bytes and represented all 150 columns. A subsequent `ask` captured all 150 archive column names and the escaped SQL names `"Active ""events"""` and `"event ""id"""` in the generation prompt. Qwen 2.5 Coder copied the quoted names into `SELECT "event ""id""" FROM "Active ""events""" LIMIT 1` and returned `[[1]]`.
+
+Both CLI fixture SHA-256 digests matched their values from before indexing. The full local request and response captures are in `.querybridge-data/pr3-03be65d-cli-ssq10tw1/`.
+
+#### Full live evaluator
+
+```powershell
+python -B -u -m tests.evaluate --live --generation-model qwen2.5-coder:7b --embedding-model nomic-embed-text:latest --ollama-timeout 120
+python -B -u -m tests.evaluate --live --generation-model qwen3.5:4b --embedding-model nomic-embed-text:latest --ollama-timeout 120
+```
+
+Both commands completed all 21 cases and exited 1 for the mismatches. Each run made 18 model calls and handled three cases with profile clarification rules. All 42 live fixture-byte checks passed.
+
+| Model | Full suite | Original 13 |
+| --- | ---: | ---: |
+| `qwen2.5-coder:7b` | 14/21 | 11/13 |
+| `qwen3.5:4b` | 14/21 | 10/13 |
+
+The failures below use the fixed expectations from the evaluator. Each entry records the actual outcome, total case time in seconds, and the generated SQL and binds when available.
+
+<details>
+<summary>qwen2.5-coder:7b misses</summary>
+
+```jsonl
+{"case":"water-revenue","expected":[[400]],"actual":[[null]],"sql":"SELECT SUM(\"i\".\"revenue_cents\") FROM \"sale_transaction_items\" AS \"i\" JOIN \"sale_transactions\" AS \"t\" ON \"t\".\"id\" = \"i\".\"transaction_id\" WHERE \"t\".\"event_id\" = ? AND \"t\".\"status\" = 'completed' AND \"i\".\"product_id\" = ?","parameters":[1,"Water"],"seconds":3.609}
+{"case":"branch-copies","expected":[["North",2],["South",6]],"actual":{"status":"invalid_query","message":"near \"branches\": syntax error"},"sql":"SELECT \"label\", SUM(\"copies\") AS total_copies FROM \"Library branches\" JOIN \"Book \"\"catalog\"\" ON \"Library branches\".\"district\" = \"Book \"\"catalog\"\".\"district\" AND \"Library branches\".\"code\" = \"Book \"\"catalog\"\".\"branch_code\" GROUP BY \"label\" ORDER BY \"label\" ASC","parameters":[],"seconds":2.438}
+{"case":"utc-boundary-rows","expected":[[105],[106],[110]],"actual":[],"sql":"SELECT DISTINCT \"st\".\"id\" FROM \"sale_transactions\" AS \"st\" JOIN \"events\" AS \"e\" ON \"e\".\"id\" = \"st\".\"event_id\" WHERE \"e\".\"is_active\" = 1 AND \"st\".\"status\" = 'completed' AND qb_utc_us(\"st\".\"created_at\") >= qb_utc_us('2026-06-01T00:00:00Z') AND qb_utc_us(\"st\".\"created_at\") < qb_utc_us('2026-06-02T00:00:00Z') ORDER BY \"st\".\"id\"","parameters":[],"seconds":4.797}
+{"case":"utc-start-microsecond","expected":[[106]],"actual":[],"sql":"SELECT DISTINCT \"st\".\"id\" FROM \"sale_transactions\" AS \"st\" JOIN \"events\" AS \"e\" ON \"e\".\"id\" = \"st\".\"event_id\" WHERE \"e\".\"is_active\" = 1 AND \"st\".\"status\" = 'completed' AND qb_utc_us(\"st\".\"created_at\") >= qb_utc_us('2026-06-01T00:00:00Z') AND qb_utc_us(\"st\".\"created_at\") < qb_utc_us('2026-06-01T00:00:00.000001Z') ORDER BY \"st\".\"id\"","parameters":[],"seconds":5.375}
+{"case":"utc-end-microsecond","expected":[[110]],"actual":[],"sql":"SELECT DISTINCT \"st\".\"id\" FROM \"sale_transactions\" AS \"st\" JOIN \"events\" AS \"e\" ON \"e\".\"id\" = \"st\".\"event_id\" WHERE \"e\".\"is_active\" = 1 AND \"st\".\"status\" = 'completed' AND qb_utc_us(\"st\".\"created_at\") >= qb_utc_us('2026-06-01T23:59:59.999999Z') AND qb_utc_us(\"st\".\"created_at\") < qb_utc_us('2026-06-02T00:00:00Z') ORDER BY \"st\".\"id\"","parameters":[],"seconds":5.328}
+{"case":"free-product-units","expected":[[3]],"actual":[[4]],"sql":"SELECT SUM(\"i\".\"quantity\") FROM \"sale_transaction_items\" AS \"i\" JOIN \"sale_transactions\" AS \"t\" ON \"t\".\"id\" = \"i\".\"transaction_id\" WHERE \"t\".\"event_id\" = ? AND \"t\".\"status\" = 'completed' AND \"t\".\"payment_type\" IN ('cash', 'square', 'free')","parameters":[1],"seconds":3.407}
+{"case":"inactive-paid-units","expected":[[2]],"actual":{"status":"invalid_query","message":"no such column: t.is_active"},"sql":"SELECT SUM(\"i\".\"quantity\") FROM \"sale_transaction_items\" AS \"i\" JOIN \"sale_transactions\" AS \"t\" ON \"t\".\"id\" = \"i\".\"transaction_id\" WHERE \"t\".\"event_id\" = ? AND \"t\".\"status\" = 'completed' AND \"t\".\"payment_type\" IN ('cash', 'square') AND \"t\".\"is_active\" = 0","parameters":[2],"seconds":6.312}
+```
+
+</details>
+
+<details>
+<summary>qwen3.5:4b misses</summary>
+
+```jsonl
+{"case":"reversals","expected":[[1]],"actual":{"status":"unsupported","message":"The question requests a count of 'reversed transactions' for event 1. The business definition for 'status' states that completed-event reports include only transactions with status = 'completed', and explicitly notes: 'Use that filter for both financial summaries and sales unit totals unless the question explicitly requests reversal history.' However, the provided definitions do not contain a specific pattern or instruction on how to query for reversed transactions (which typically have status='reversed'). Furthermore, the question asks for a count of transactions rather than a sum of quantities, which is not covered by the 'units-and-waste' definition. The available patterns focus on completed sales and paid units. Without a defined business rule or SQL pattern for counting reversed transactions, the request cannot be answered using the supplied context."},"sql":null,"parameters":null,"seconds":4.125}
+{"case":"timezone-resolved","expected":[[600]],"actual":[[null]],"sql":"SELECT SUM(\"t\".\"total_revenue_cents\") AS total_revenue_cents FROM \"sale_transactions\" AS \"t\" JOIN \"events\" AS \"e\" ON \"e\".\"id\" = \"t\".\"event_id\" WHERE \"t\".\"status\" = 'completed' AND \"t\".\"created_at\" >= qb_utc_us('2026-06-01T00:00:00Z') AND \"t\".\"created_at\" < qb_utc_us('2026-06-02T00:00:00Z')","parameters":[],"seconds":3.75}
+{"case":"branch-copies","expected":[["North",2],["South",6]],"actual":{"status":"invalid_query","message":"near \"branches\": syntax error"},"sql":"SELECT lb.label, SUM(bc.copies) AS total_copies FROM \"Book \"\"catalog\"\" bc JOIN \"Library branches\" lb ON bc.district = lb.district AND bc.branch_code = lb.code GROUP BY lb.label ORDER BY lb.label ASC","parameters":[],"seconds":1.844}
+{"case":"utc-boundary-revenue","expected":[[1100]],"actual":[[null]],"sql":"SELECT SUM(\"t\".\"total_revenue_cents\") AS total_revenue_cents FROM \"sale_transactions\" AS \"t\" JOIN \"events\" AS \"e\" ON \"e\".\"id\" = \"t\".\"event_id\" WHERE \"t\".\"status\" = 'completed' AND \"t\".\"created_at\" >= qb_utc_us('2026-06-01T00:00:00Z') AND \"t\".\"created_at\" < qb_utc_us('2026-06-02T00:00:00Z')","parameters":[],"seconds":3.657}
+{"case":"microsecond-window","expected":[[101],[102]],"actual":[],"sql":"SELECT \"t\".\"id\" FROM \"sale_transactions\" AS \"t\" JOIN \"events\" AS \"e\" ON \"t\".\"event_id\" = \"e\".\"id\" WHERE \"e\".\"name\" = '1' AND \"t\".\"status\" = 'completed' AND qb_utc_us(\"t\".\"created_at\") >= qb_utc_us('2026-09-01T16:00:00.000002Z') AND qb_utc_us(\"t\".\"created_at\") < qb_utc_us('2026-09-01T16:00:00.000004Z') ORDER BY \"t\".\"id\"","parameters":[],"seconds":4.234}
+{"case":"paid-product-units","expected":[[2]],"actual":{"status":"invalid_query","message":"no such column: p.name"},"sql":"SELECT SUM(\"i\".\"quantity\") AS total_paid_units FROM \"sale_transaction_items\" AS \"i\" JOIN \"sale_transactions\" AS \"t\" ON \"t\".\"id\" = \"i\".\"transaction_id\" WHERE \"t\".\"event_id\" = ? AND \"t\".\"status\" = 'completed' AND \"t\".\"payment_type\" IN ('cash', 'square') AND \"p\".\"name\" = 'Water'","parameters":[1,"Water"],"seconds":3.141}
+{"case":"free-product-units","expected":[[3]],"actual":[[4]],"sql":"SELECT SUM(\"i\".\"quantity\") AS total_units_sold FROM \"sale_transaction_items\" AS \"i\" JOIN \"sale_transactions\" AS \"t\" ON \"t\".\"id\" = \"i\".\"transaction_id\" WHERE \"t\".\"event_id\" = :event_id AND \"t\".\"status\" = 'completed' AND \"t\".\"payment_type\" IN ('cash', 'square', 'free')","parameters":{"event_id":1},"seconds":3.125}
+```
+
+</details>
+
+Full traces are in `.querybridge-data/pr3-03be65d-live-qwen2.5-coder-7b.log` and `.querybridge-data/pr3-03be65d-live-qwen3.5-4b.log`.
+
+#### Merge assessment
+
+The UTC normalization, exact timestamp helper, compact embedding document, and escaped prompt identifiers passed the deterministic checks. The remaining failures were traceable to generated SQL or an incorrect unsupported decision. The follow-up records verification evidence.
+
+The smallest reliable next step is to assemble the affected report shapes from validated, bound values using the existing profile and schema. For UTC questions, build the half-open `qb_utc_us` predicate on the timestamp column and both bounds. Carry explicit event scope into that shape so an all-events request stays unrestricted and an event ID stays an ID. For named-product revenue and quantities, reuse the profile's join and aggregation shapes with the product and event bound separately. A reversal count can use the supplied event ID and saved `reversed` status. Render identifiers for these shapes from the catalog's escaped names, including both columns of the library composite join.
+
+Keep the PR in draft until the supported report shapes consistently produce correct results or surface a classified validation error for invalid model SQL. Recheck the fixed 21-case suite with both pinned tags before marking the reporting accuracy work ready to merge.
