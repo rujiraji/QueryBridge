@@ -1,14 +1,16 @@
 # QueryBridge
 
-QueryBridge, formerly Usense, is a project for asking natural-language questions about relational data. Phase 1 implements the SQLite foundation and is awaiting independent review. Natural-language queries, the React interface, and report generation are planned.
+QueryBridge, formerly Usense, lets users ask questions about relational data. The SQLite foundation passed independent review. The Phase 2 local query pipeline and its reporting-context fix are awaiting independent review. The evaluation record includes offline checks, live Ollama results, and observed accuracy failures. [Evaluation record](docs/evaluation.md)
 
 ## Run locally
 
-Use Python 3.12 or newer with SQLite 3.37 or newer. The connector and CLI use the Python standard library. From the repository root, run `python -m querybridge --help`. Installing the project with `python -m pip install .` also provides the `querybridge` command.
+Use Python 3.12 or newer with SQLite 3.37 or newer. From the repository root, run `python -m querybridge --help`. Installing with `python -m pip install .` provides the `querybridge` command and the standard-library SQLite workflows.
+
+For the local model and retrieval workflows, install `python -m pip install ".[nl]"`. Use `ready` to check Ollama and ChromaDB, `index` to prepare a database, and `ask` to run a question through the restricted SQLite connector. [Setup and complete example](docs/local-pipeline.md)
 
 ## Verify Phase 1
 
-Run the synthetic test suite with `python -B -m unittest discover -v`.
+Run the original SQLite tests with `python -B -m unittest tests.test_sqlite tests.test_concessions -v`. With the `nl` extra installed, `python -B -m unittest discover -v` also covers the local pipeline. [Evaluation results](docs/evaluation.md)
 
 Create a disposable concession fixture at a fresh path and inspect it. The inspection lists the four fixture tables and their declared keys, with a schema fingerprint.
 

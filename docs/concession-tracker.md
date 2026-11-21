@@ -35,6 +35,8 @@ python -B -m tests.check_tracker ../concession-stand-tracker
 
 This check expects a checkout of the inspected commit and uses the tracker's standard-library service modules. It generates its own transactions, including free, waste, and reversed sales. Expected results are four completed transactions, 900 cents revenue, 350 cents cost, 550 cents profit, and five remaining units.
 
+The Phase 1 independent reviewer verified the generic foundation and could not independently rerun the authenticated tracker check. The Phase 2 implementer reran the check against the pinned local checkout and reproduced the expected results. The opt-in Phase 2 profile records the pinned reporting definitions and asks for scope when a policy is undecided. [Business profile](../profiles/concessions.json) · [Verification record](evaluation.md)
+
 ## Open reporting questions
 
 - Which timezone and day boundaries should calendar reports use when users ask for a date range?

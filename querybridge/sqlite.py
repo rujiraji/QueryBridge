@@ -26,6 +26,7 @@ from .connector import (
     QueryTimeoutError,
     Relation,
     Scalar,
+    SchemaChangedError,
     Truncation,
 )
 
@@ -89,8 +90,7 @@ class SQLiteConnector:
                     unsupported_reason=reason,
                 ))
 
-            catalog_json = encode_json([asdict(entry) for entry in definitions])
-            fingerprint = hashlib.sha256(catalog_json.encode("ascii")).hexdigest()
+            fingerprint = _fingerprint(definitions)
             deadline.check()
             return DatabaseSchema(
                 fingerprint=fingerprint,
@@ -100,11 +100,16 @@ class SQLiteConnector:
                 ),
             )
 
-    def execute(self, sql: str, parameters: Parameters = ()) -> QueryResult:
+    def execute(
+        self, sql: str, parameters: Parameters = (), *, expected_fingerprint: str | None = None,
+    ) -> QueryResult:
         """Execute one authorized statement and return a bounded result."""
         deadline = _Deadline(self._limits.timeout_seconds)
         with _read_snapshot(self._database, deadline) as connection:
             listed, table_columns = _relation_catalog(connection)
+            if expected_fingerprint is not None and _fingerprint(_schema_definitions(connection)) != expected_fingerprint:
+                deadline.check()
+                raise SchemaChangedError("The SQLite schema changed during generation. Ask the question again.")
             authorization = _ReadAuthorizer(listed, table_columns)
             connection.setlimit(sqlite3.SQLITE_LIMIT_SQL_LENGTH, _MAX_SQL_BYTES)
             connection.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, _MAX_SQLITE_BYTES)
@@ -195,6 +200,11 @@ def _schema_definitions(connection: sqlite3.Connection) -> tuple[Definition, ...
         )
         if not row["name"].startswith("sqlite_")
     )
+
+
+def _fingerprint(definitions: tuple[Definition, ...]) -> str:
+    catalog_json = encode_json([asdict(entry) for entry in definitions])
+    return hashlib.sha256(catalog_json.encode("ascii")).hexdigest()
 
 
 def _quote_identifier(name: str) -> str:

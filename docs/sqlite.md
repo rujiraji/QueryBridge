@@ -23,3 +23,5 @@ Results default to 1,000 rows and 1 MiB of compact JSON for the `columns` and `r
 The CLI returns `ok` or `empty` for successful queries. A single row containing `NULL` is a result row. Errors exit with status `1` and use `rejected_query`, `invalid_query`, `timeout`, or `database_error` on stderr. Argument errors exit with status `2`. Missing files fail before connection and existing zero-byte files are treated as empty SQLite databases.
 
 QueryBridge stores no application state in the source database. SQLite can use WAL sidecars for read coordination, including creating `-wal` and `-shm` on a writable filesystem. For a live WAL database, keep the sidecars available. [SQLite read-only WAL databases](https://www.sqlite.org/wal.html#read_only_databases)
+
+The natural-language pipeline provides the inspected fingerprint to `SQLiteConnector.execute`. The connector checks it inside the read snapshot before preparing the proposed statement. A mismatch returns `schema_changed`. Direct SQL keeps the existing interface and result shape. [Local pipeline](local-pipeline.md)
